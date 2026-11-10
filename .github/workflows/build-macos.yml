@@ -7,6 +7,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-mac:
     runs-on: macos-latest
@@ -15,22 +18,24 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 22
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          rm -f package-lock.json
+          npm install
 
       - name: Build Web Assets (Vite)
         run: npm run build
 
       - name: Package macOS App (.dmg and .zip)
-        run: npx electron-builder --mac --arm64 --x64
+        run: npx electron-builder --mac --arm64 --x64 -c.mac.identity=null
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload macOS Artifacts (.dmg and .zip)
         uses: actions/upload-artifact@v4
@@ -39,4 +44,5 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+          if-no-files-found: warn
           retention-days: 30
