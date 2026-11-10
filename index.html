@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#1e40af" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SitePunch" />
+    <meta name="application-name" content="SitePunch" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Open+Sans:wght@400;600;700&family=Outfit:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+    <title>SitePunch — Site Punch List App</title>
+    <script>
+      (function() {
+        try {
+          var savedTheme = localStorage.getItem('sitepunch_theme_color');
+          if (savedTheme && savedTheme.startsWith('#')) {
+            var c = savedTheme.replace('#', '');
+            if (c.length === 3) c = c.split('').map(function(x){ return x+x; }).join('');
+            var num = parseInt(c, 16);
+            if (!isNaN(num)) {
+              var r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
+              var mixBlack = function(f) {
+                var nr = Math.max(0, Math.min(255, Math.round(r * (1 - f))));
+                var ng = Math.max(0, Math.min(255, Math.round(g * (1 - f))));
+                var nb = Math.max(0, Math.min(255, Math.round(b * (1 - f))));
+                return '#' + nr.toString(16).padStart(2, '0') + ng.toString(16).padStart(2, '0') + nb.toString(16).padStart(2, '0');
+              };
+              var brand800 = mixBlack(0.25);
+              var brand700 = mixBlack(0.12);
+              var root = document.documentElement;
+              root.style.setProperty('--brand-color', savedTheme);
+              root.style.setProperty('--brand-header', brand800);
+              root.style.setProperty('--brand-button', brand700);
+              root.style.setProperty('--brand-button-hover', brand800);
+              var styleEl = document.createElement('style');
+              styleEl.id = 'sitepunch-theme-override';
+              styleEl.textContent = ':root{--brand-color:' + savedTheme + '!important;--brand-header:' + brand800 + '!important;--brand-button:' + brand700 + '!important;--brand-button-hover:' + brand800 + '!important;}' +
+                'header,.sitepunch-header,.bg-brand-800,header.bg-brand-800{background-color:' + brand800 + '!important;}' +
+                '.sitepunch-btn-primary,.sitepunch-fab,.bg-brand-700,button.bg-brand-700{background-color:' + brand700 + '!important;}' +
+                '.sitepunch-btn-primary:hover,.sitepunch-fab:hover,.hover\\:bg-brand-800:hover,button.hover\\:bg-brand-800:hover{background-color:' + brand800 + '!important;}';
+              document.head.appendChild(styleEl);
+              var meta = document.querySelector('meta[name="theme-color"]');
+              if (meta) meta.setAttribute('content', brand800);
+            }
+          }
+          var savedFont = localStorage.getItem('sitepunch_app_font_family');
+          if (savedFont) {
+            document.documentElement.style.setProperty('--app-font-family', savedFont);
+          }
+        } catch(e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-gray-50">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
