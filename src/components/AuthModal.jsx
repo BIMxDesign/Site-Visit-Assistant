@@ -95,7 +95,7 @@ export default function AuthModal({ initialMode = 'signup', onClose }) {
               <ShieldCheck size={22} className="text-white" />
             </div>
             <h3 className="font-bold text-lg leading-tight">
-              {mode === 'signup' ? 'Create User Account' : 'Sign In to SitePunch'}
+              {mode === 'signup' ? 'Create User Account' : 'Sign In to Site Visit Assistant'}
             </h3>
             <p className="text-xs text-brand-200 mt-1 leading-snug">
               {mode === 'signup'

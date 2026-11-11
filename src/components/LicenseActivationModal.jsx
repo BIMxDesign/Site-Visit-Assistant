@@ -119,7 +119,7 @@ export default function LicenseActivationModal({ project, onSuccess, onClose }) 
                     />
                   </div>
                   <p className="text-[11px] text-gray-400 mt-1.5 leading-normal">
-                    Enter the license key received upon checkout.
+                    Enter the license key received upon checkout, or use an offline key (e.g. <code className="font-mono text-gray-600 bg-gray-100 px-1 py-0.5 rounded">OFFLINE-KEY</code>) if working on-site without internet.
                   </p>
                 </div>
 

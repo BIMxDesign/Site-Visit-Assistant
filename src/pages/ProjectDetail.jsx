@@ -4,7 +4,8 @@ import {
   FileText, AlertCircle, CheckCircle, Clock, MoreVertical,
   Download, Share2, Edit2, Filter, Check, ClipboardList,
   ChevronDown, ChevronUp, MapPin, Calendar, CloudSun, Users,
-  GripVertical, Layers, ListOrdered, FolderOpen, Camera, User
+  GripVertical, Layers, ListOrdered, FolderOpen, Camera, User, Home,
+  Search, X
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -19,10 +20,12 @@ import FloorPlanManagerModal from '../components/FloorPlanManagerModal'
 import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
 import EditProjectModal from '../components/EditProjectModal'
 import PhaseModal from '../components/PhaseModal'
+import Breadcrumbs from '../components/Breadcrumbs'
 import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern } from '../utils/formatters'
+import { hexToRgb } from '../utils/theme'
 
 const REPORT_FILTER_OPTIONS = [
-  { id: 'All',           label: 'All Reports' },
+  { id: 'All',           label: 'All Site Visits' },
   { id: 'Date (Newest)', label: 'Date (Newest)' },
   { id: 'Date (Oldest)', label: 'Date (Oldest)' },
   { id: 'Name (A-Z)',    label: 'Name (A–Z)' },
@@ -42,11 +45,14 @@ export default function ProjectDetail() {
   const {
     currentProjectUuid,
     currentPhaseUuid, setCurrentPhase,
-    navigateToDashboard, navigateToFloorPlan,
+    navigateToDashboard, navigateToProjects, navigateToFloorPlan,
     openFloorPlanManager, showFloorPlanManager, closeFloorPlanManager,
     openPDFPreview, openPunchForm, setCurrentPunchItem,
     showPunchForm,
+    pinColor,
   } = useAppStore()
+
+  const { r: pinR, g: pinG, b: pinB } = hexToRgb(pinColor)
 
   const [project,       setProject]       = useState(null)
   const [phases,        setPhases]        = useState([])
@@ -60,6 +66,11 @@ export default function ProjectDetail() {
   const [showPhaseModal, setShowPhaseModal] = useState(false)
   const [editingPhase,  setEditingPhase]  = useState(null)
   const [expandedFpUuids, setExpandedFpUuids] = useState(new Set())
+  const [searchQuery,   setSearchQuery]   = useState('')
+  const [siteVisitSearchQuery, setSiteVisitSearchQuery] = useState('')
+  const [overviewTab,   setOverviewTab]   = useState('sitevisits') // 'sitevisits' | 'keyplans' | 'punchitems' | 'images'
+  const [galleryPhotos, setGalleryPhotos] = useState([])
+  const [previewPhoto,  setPreviewPhoto]  = useState(null)
 
   const toggleFpAccordion = (fpUuid) => {
     setExpandedFpUuids(prev => {
@@ -114,10 +125,13 @@ export default function ProjectDetail() {
     setPunchItems(items)
 
     const itemUuids = items.map(i => i.uuid)
-    const photoCount = itemUuids.length > 0
-      ? await db.photos.where('punchItemUuid').anyOf(itemUuids).count().catch(() => 0)
-      : 0
-    setTotalPhotos(photoCount)
+    let photosList = []
+    if (itemUuids.length > 0) {
+      photosList = await db.photos.where('punchItemUuid').anyOf(itemUuids).toArray().catch(() => [])
+      photosList.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    }
+    setGalleryPhotos(photosList)
+    setTotalPhotos(photosList.length)
     // Update counts on project
     if (proj) {
       await saveProject({ ...proj, totalItems: items.length })
@@ -145,6 +159,19 @@ export default function ProjectDetail() {
   const filteredPhases = useMemo(() => {
     let list = [...phases]
 
+    if (siteVisitSearchQuery.trim()) {
+      const q = siteVisitSearchQuery.trim().toLowerCase()
+      list = list.filter(phase => {
+        const nameMatch = (phase.name || '').toLowerCase().includes(q)
+        const dateMatch = (phase.visitDate || '').toLowerCase().includes(q)
+        const weatherMatch = (phase.weather || '').toLowerCase().includes(q)
+        const attendeesMatch = (phase.attendees || '').toLowerCase().includes(q)
+        const notesMatch = (phase.notes || '').toLowerCase().includes(q)
+        const authorMatch = (phase.author || phase.reportCreatedBy || '').toLowerCase().includes(q)
+        return nameMatch || dateMatch || weatherMatch || attendeesMatch || notesMatch || authorMatch
+      })
+    }
+
     if (filter === 'Key Plans') {
       list = list.filter(phase => {
         const fps = floorPlans.filter(fp => fp.phaseUuid === phase.uuid || (!fp.phaseUuid && phase === phases[0]))
@@ -168,7 +195,7 @@ export default function ProjectDetail() {
     }
 
     return list
-  }, [phases, floorPlans, filter])
+  }, [phases, floorPlans, filter, siteVisitSearchQuery])
 
   const handleMoveFloorPlan = async (fpUuid, direction) => {
     const list = [...activePhaseFps]
@@ -539,16 +566,20 @@ export default function ProjectDetail() {
   }
 
   const handleAddNewObservationForPhase = async () => {
-    if (!activePhase) return
+    const targetPhase = activePhase || phases[0]
+    if (!targetPhase) {
+      setShowPhaseModal(true)
+      return
+    }
     const { savePunchItem, getNextItemNumber } = await import('../db/database')
     const { v4: uuidv4 } = await import('uuid')
-    const nextNumber = await getNextItemNumber(currentProjectUuid, activePhase.uuid)
+    const nextNumber = await getNextItemNumber(currentProjectUuid, targetPhase.uuid)
     const newUuid = uuidv4()
     const newItem = {
       uuid: newUuid,
       projectUuid: currentProjectUuid,
       floorPlanUuid: null,
-      phaseUuid: activePhase.uuid,
+      phaseUuid: targetPhase.uuid,
       itemNumber: nextNumber,
       title: '',
       notes: '',
@@ -587,7 +618,7 @@ export default function ProjectDetail() {
     const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
     const phaseItems = punchItems.filter(i => phaseFpUuids.has(i.floorPlanUuid))
     const confirmed = window.confirm(
-      `Delete Report "${phase.name}"?\n\nThis will permanently delete this report, along with its ${phaseFps.length} key plan(s) and ${phaseItems.length} observation(s).`
+      `Delete Site Visit "${phase.name}"?\n\nThis will permanently delete this site visit, along with its ${phaseFps.length} key plan(s) and ${phaseItems.length} observation(s).`
     )
     if (!confirmed) return
     if (currentPhaseUuid === phase.uuid) {
@@ -609,6 +640,39 @@ export default function ProjectDetail() {
 
   const displayedItems = activePhase ? activePhaseItems : punchItems
 
+  const query = searchQuery.trim().toLowerCase()
+
+  const matchesObservation = (item) => {
+    if (!query) return true
+    const itemNum = String(item.itemNumber || '').toLowerCase()
+    const title = (item.title || '').toLowerCase()
+    const desc = (item.description || '').toLowerCase()
+    const cat = (item.category || '').toLowerCase()
+    const room = (item.room || '').toLowerCase()
+    const status = (item.status || '').toLowerCase()
+    return itemNum.includes(query) ||
+      `#${itemNum}`.includes(query) ||
+      title.includes(query) ||
+      desc.includes(query) ||
+      cat.includes(query) ||
+      room.includes(query) ||
+      status.includes(query)
+  }
+
+  const matchesFloorPlan = (fp) => {
+    if (!query) return true
+    if ((fp.name || '').toLowerCase().includes(query)) return true
+    const fpItems = punchItems.filter(i => i.floorPlanUuid === fp.uuid)
+    return fpItems.some(matchesObservation)
+  }
+
+  const displayedActivePhaseFps = activePhaseFps.filter(matchesFloorPlan)
+
+  const displayedDirectItems = activePhaseItems
+    .filter(i => !i.floorPlanUuid)
+    .filter(matchesObservation)
+    .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -623,9 +687,9 @@ export default function ProjectDetail() {
       >
         <div className="flex items-center gap-2 min-h-[44px]">
           <button
-            onClick={activePhase ? () => setCurrentPhase(null) : navigateToDashboard}
+            onClick={activePhase ? () => { setCurrentPhase(null); setSearchQuery('') } : overviewTab !== 'sitevisits' ? () => setOverviewTab('sitevisits') : navigateToProjects}
             className="liquid-glass-btn min-w-[40px] min-h-[40px] p-2 -ml-1 rounded-xl text-white transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
-            title={activePhase ? "Back to Reports" : "Back to Projects"}
+            title={activePhase ? "Back to Site Visits" : overviewTab !== 'sitevisits' ? "Back to Site Visits" : "Back to Projects"}
           >
             <ArrowLeft size={20} />
           </button>
@@ -633,16 +697,19 @@ export default function ProjectDetail() {
             {activePhase ? (
               <>
                 <h1 className="font-extrabold text-base sm:text-lg leading-tight truncate text-white drop-shadow-xs">
-                  {activePhase.name}
+                  Observations
                 </h1>
                 <p className="text-white/85 text-xs sm:text-sm leading-tight mt-0.5 truncate font-medium">
-                  {project.name}{project.number ? ` · #${project.number}` : ''}
+                  {activePhase.name}
                 </p>
               </>
             ) : (
               <>
                 <h1 className="font-extrabold text-base sm:text-lg leading-tight truncate text-white drop-shadow-xs">
-                  Reports
+                  {overviewTab === 'sitevisits' && 'Site Visits'}
+                  {overviewTab === 'keyplans' && 'Key Plans'}
+                  {overviewTab === 'punchitems' && 'Punch Items'}
+                  {overviewTab === 'images' && 'Images Gallery'}
                 </h1>
                 <p className="text-white/85 text-xs sm:text-sm leading-tight mt-0.5 truncate font-medium">
                   {project.name}{project.number ? ` · #${project.number}` : ''}
@@ -652,53 +719,103 @@ export default function ProjectDetail() {
           </div>
 
           {activePhase ? (
-            <button
-              onClick={openPDFPreview}
-              className="liquid-glass-btn min-h-[40px] px-3.5 rounded-xl transition-all flex items-center justify-center gap-1.5 text-white text-xs font-bold flex-shrink-0 cursor-pointer"
-              title="Export report"
-            >
-              <FileText size={15} />
-              <span>Export</span>
-            </button>
-          ) : (
-            /* Filter button moved to top menu bar right end */
-            <div className="relative flex-shrink-0 z-50" id="report-filter-container">
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {/* Green Box: Search Bar */}
+              <div className="relative flex items-center">
+                <Search size={14} className="absolute left-3 text-white/70 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search observations..."
+                  className="liquid-glass-btn h-[40px] pl-8 pr-7 text-xs text-white placeholder-white/60 rounded-xl focus:outline-none focus:ring-1 focus:ring-white/80 w-28 sm:w-44 md:w-56 transition-all"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 text-white/70 hover:text-white p-0.5 cursor-pointer"
+                    title="Clear search"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+
+              {/* Yellow Box: Generate Report Button with Report text below Generate for concise width */}
               <button
-                type="button"
-                onClick={() => setShowFilter(f => !f)}
-                className={`liquid-glass-btn min-h-[40px] px-3.5 rounded-xl transition-all flex items-center justify-center gap-1.5 text-white text-xs font-bold flex-shrink-0 cursor-pointer ${
-                  filter !== 'All' ? 'bg-white/30 ring-1 ring-white/50' : ''
-                }`}
-                title="Filter and sort reports"
+                onClick={openPDFPreview}
+                className="liquid-glass-btn min-h-[40px] px-2.5 py-1 rounded-xl transition-all flex items-center justify-center gap-1.5 text-white flex-shrink-0 cursor-pointer active:scale-95"
+                title="Generate Report"
               >
-                <Filter size={14} className="text-white" />
-                <span>{filter === 'All' ? 'Filter' : (REPORT_FILTER_OPTIONS.find(o => o.id === filter)?.label || filter)}</span>
-              </button>
-              {showFilter && (
-                <div
-                  className="bg-white/95 backdrop-blur-xl border border-gray-200/90 rounded-2xl p-1.5 shadow-2xl z-50"
-                  style={{
-                    position: 'absolute', right: 0, top: 'calc(100% + 8px)', zIndex: 100,
-                    minWidth: 170,
-                  }}
-                >
-                  {REPORT_FILTER_OPTIONS.map(opt => (
-                    <button
-                      key={opt.id}
-                      onClick={() => { setFilter(opt.id); setShowFilter(false) }}
-                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between cursor-pointer transition-colors"
-                      style={{
-                        background: filter === opt.id ? 'var(--brand-50, #eff6ff)' : 'transparent',
-                        color:      filter === opt.id ? 'var(--brand-color, #1d4ed8)' : '#374151',
-                        fontWeight: filter === opt.id ? 700 : 500,
-                      }}
-                    >
-                      <span>{opt.label}</span>
-                      {filter === opt.id && <Check size={14} className="text-brand-600 ml-2" />}
-                    </button>
-                  ))}
+                <FileText size={16} className="flex-shrink-0" />
+                <div className="flex flex-col text-left leading-[1.05]">
+                  <span className="text-[11px] font-bold tracking-tight">Generate</span>
+                  <span className="text-[11px] font-bold tracking-tight text-white/90">Report</span>
                 </div>
-              )}
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {/* Site Visit Search Box */}
+              <div className="relative flex items-center">
+                <Search size={14} className="absolute left-3 text-white/70 pointer-events-none" />
+                <input
+                  type="text"
+                  value={siteVisitSearchQuery}
+                  onChange={(e) => setSiteVisitSearchQuery(e.target.value)}
+                  placeholder="Search site visits..."
+                  className="liquid-glass-btn h-[40px] pl-8 pr-7 text-xs text-white placeholder-white/60 rounded-xl focus:outline-none focus:ring-1 focus:ring-white/80 w-32 sm:w-48 md:w-56 transition-all"
+                />
+                {siteVisitSearchQuery && (
+                  <button
+                    onClick={() => setSiteVisitSearchQuery('')}
+                    className="absolute right-2 text-white/70 hover:text-white p-0.5 cursor-pointer"
+                    title="Clear search"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+
+              {/* Filter button moved to top menu bar right end */}
+              <div className="relative flex-shrink-0 z-50" id="report-filter-container">
+                <button
+                  type="button"
+                  onClick={() => setShowFilter(f => !f)}
+                  className={`liquid-glass-btn min-h-[40px] px-3.5 rounded-xl transition-all flex items-center justify-center gap-1.5 text-white text-xs font-bold flex-shrink-0 cursor-pointer ${
+                    filter !== 'All' ? 'bg-white/30 ring-1 ring-white/50' : ''
+                  }`}
+                  title="Filter and sort site visits"
+                >
+                  <Filter size={14} className="text-white" />
+                  <span>{filter === 'All' ? 'Filter' : (REPORT_FILTER_OPTIONS.find(o => o.id === filter)?.label || filter)}</span>
+                </button>
+                {showFilter && (
+                  <div
+                    className="bg-white/95 backdrop-blur-xl border border-gray-200/90 rounded-2xl p-1.5 shadow-2xl z-50"
+                    style={{
+                      position: 'absolute', right: 0, top: 'calc(100% + 8px)', zIndex: 100,
+                      minWidth: 170,
+                    }}
+                  >
+                    {REPORT_FILTER_OPTIONS.map(opt => (
+                      <button
+                        key={opt.id}
+                        onClick={() => { setFilter(opt.id); setShowFilter(false) }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between cursor-pointer transition-colors"
+                        style={{
+                          background: filter === opt.id ? 'var(--brand-50, #eff6ff)' : 'transparent',
+                          color:      filter === opt.id ? 'var(--brand-color, #a40e26)' : '#374151',
+                          fontWeight: filter === opt.id ? 700 : 500,
+                        }}
+                      >
+                        <span>{opt.label}</span>
+                        {filter === opt.id && <Check size={14} className="text-brand-600 ml-2" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -713,53 +830,142 @@ export default function ProjectDetail() {
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        {/* Statistics Banner: Only shown on All Reports page */}
+        {/* Statistics Banner: Interactive Category Switcher on All Site Visits page */}
         {!activePhase && (
-          <div className="liquid-glass-surface rounded-2xl p-3 sm:p-4 shadow-sm">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              <div className="p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                  <ClipboardList size={14} className="text-blue-600" />
-                  <span>Reports</span>
-                </div>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">{phases.length}</p>
-              </div>
+          <>
+            <div className="liquid-glass-surface rounded-2xl p-2.5 sm:p-3.5 shadow-sm">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
+                {/* 1. Site Visits Tab Button */}
+                <button
+                  type="button"
+                  onClick={() => setOverviewTab('sitevisits')}
+                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                    overviewTab === 'sitevisits'
+                      ? 'bg-purple-50/90 border-purple-400 shadow-md ring-2 ring-purple-500/30'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-purple-200 shadow-2xs hover:shadow-xs'
+                  }`}
+                  title="View all site visits"
+                >
+                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
+                    <ClipboardList size={14} className="text-purple-700 stroke-[2.2]" />
+                    <span className={overviewTab === 'sitevisits' ? 'text-purple-900 font-bold' : ''}>Site Visits</span>
+                  </div>
+                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{phases.length}</p>
+                  {overviewTab === 'sitevisits' && (
+                    <div className="w-8 h-1 rounded-full bg-purple-600 mt-1 animate-fade-in" />
+                  )}
+                </button>
 
-              <div className="p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                  <FileImage size={14} className="text-indigo-600" />
-                  <span>Key Plans</span>
-                </div>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">{floorPlans.length}</p>
-              </div>
+                {/* 2. Key Plans Tab Button */}
+                <button
+                  type="button"
+                  onClick={() => setOverviewTab('keyplans')}
+                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                    overviewTab === 'keyplans'
+                      ? 'shadow-md ring-2'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 shadow-2xs hover:shadow-xs'
+                  }`}
+                  style={
+                    overviewTab === 'keyplans'
+                      ? {
+                          background: 'linear-gradient(135deg, rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1) 0%, rgba(255, 255, 255, 0.95) 100%)',
+                          borderColor: 'var(--punch-pin-color, #a40e26)',
+                          boxShadow: '0 4px 14px -2px rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.25)',
+                        }
+                      : {}
+                  }
+                  title="View key plan drawings gallery"
+                >
+                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
+                    <FileImage size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
+                    <span style={overviewTab === 'keyplans' ? { color: 'var(--punch-pin-color, #a40e26)', fontWeight: 700 } : {}}>Key Plans</span>
+                  </div>
+                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{floorPlans.length}</p>
+                  {overviewTab === 'keyplans' && (
+                    <div className="w-8 h-1 rounded-full mt-1 animate-fade-in" style={{ background: 'var(--punch-pin-color, #a40e26)' }} />
+                  )}
+                </button>
 
-              <div className="p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                  <AlertCircle size={14} className="text-red-500" />
-                  <span>Punch Items</span>
-                </div>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">{punchItems.length}</p>
-              </div>
+                {/* 3. Punch Items Tab Button */}
+                <button
+                  type="button"
+                  onClick={() => setOverviewTab('punchitems')}
+                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                    overviewTab === 'punchitems'
+                      ? 'shadow-md ring-2'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 shadow-2xs hover:shadow-xs'
+                  }`}
+                  style={
+                    overviewTab === 'punchitems'
+                      ? {
+                          background: 'linear-gradient(135deg, rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1) 0%, rgba(255, 255, 255, 0.95) 100%)',
+                          borderColor: 'var(--punch-pin-color, #a40e26)',
+                          boxShadow: '0 4px 14px -2px rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.25)',
+                        }
+                      : {}
+                  }
+                  title="View all punch list items"
+                >
+                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
+                    <AlertCircle size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
+                    <span style={overviewTab === 'punchitems' ? { color: 'var(--punch-pin-color, #a40e26)', fontWeight: 700 } : {}}>Punch Items</span>
+                  </div>
+                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{punchItems.length}</p>
+                  {overviewTab === 'punchitems' && (
+                    <div className="w-8 h-1 rounded-full mt-1 animate-fade-in" style={{ background: 'var(--punch-pin-color, #a40e26)' }} />
+                  )}
+                </button>
 
-              <div className="p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                  <Camera size={14} className="text-emerald-600" />
-                  <span>Images</span>
-                </div>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">{totalPhotos}</p>
+                {/* 4. Images Tab Button */}
+                <button
+                  type="button"
+                  onClick={() => setOverviewTab('images')}
+                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                    overviewTab === 'images'
+                      ? 'bg-emerald-50/90 border-emerald-400 shadow-md ring-2 ring-emerald-500/30'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-emerald-200 shadow-2xs hover:shadow-xs'
+                  }`}
+                  title="View all observation photos gallery"
+                >
+                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
+                    <Camera size={14} className="text-emerald-600 stroke-[2.2]" />
+                    <span className={overviewTab === 'images' ? 'text-emerald-900 font-bold' : ''}>Images</span>
+                  </div>
+                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{totalPhotos}</p>
+                  {overviewTab === 'images' && (
+                    <div className="w-8 h-1 rounded-full bg-emerald-600 mt-1 animate-fade-in" />
+                  )}
+                </button>
               </div>
             </div>
-          </div>
+
+            {/* Breadcrumb Navigation Path - All Site Visits */}
+            <Breadcrumbs
+              items={[
+                { label: 'Dashboard', icon: <Home size={13} />, onClick: navigateToDashboard },
+                { label: 'Projects', onClick: navigateToProjects },
+                overviewTab === 'sitevisits'
+                  ? { label: project.name || 'Project', active: true }
+                  : { label: project.name || 'Project', onClick: () => setOverviewTab('sitevisits') },
+                ...(overviewTab !== 'sitevisits' ? [
+                  {
+                    label: overviewTab === 'keyplans' ? 'Key Plans'
+                      : overviewTab === 'punchitems' ? 'Punch Items'
+                      : 'Images Gallery',
+                    active: true
+                  }
+                ] : [])
+              ]}
+            />
+          </>
         )}
-        {activeTab === 'floorplans' && (
+
+      {activeTab === 'floorplans' && (
           activePhase ? (
             /* ── Single Report Opened View: See all floor plans in this report ── */
             <div className="space-y-4">
               {/* Site Visit Details Card */}
-              <div
-                className="liquid-glass-card rounded-2xl p-4 sm:p-5 transition-all"
-                style={{ borderLeft: '4px solid var(--brand-button, #1d4ed8)' }}
-              >
+              <div className="liquid-glass-card rounded-2xl p-4 sm:p-5 transition-all">
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs flex-1 min-w-0">
                     <div className="flex items-start gap-2.5 bg-white/70 backdrop-blur-md p-3 rounded-xl border border-white/90 shadow-2xs">
@@ -799,7 +1005,7 @@ export default function ProjectDetail() {
                     <div className="flex items-start gap-2.5 bg-white/70 backdrop-blur-md p-3 rounded-xl border border-white/90 shadow-2xs">
                       <User size={16} className="text-brand-600 mt-0.5 flex-shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Report Created By</span>
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Report created by</span>
                         <span className="text-gray-800 font-semibold truncate block mt-0.5" title={activePhase.createdBy || ''}>
                           {activePhase.createdBy?.trim() || <span className="text-gray-400 font-normal italic">None specified</span>}
                         </span>
@@ -839,6 +1045,16 @@ export default function ProjectDetail() {
                 </div>
               </div>
 
+              {/* Breadcrumb Navigation Path - Placed Below Site Visit Details Card */}
+              <Breadcrumbs
+                items={[
+                  { label: 'Dashboard', icon: <Home size={13} />, onClick: navigateToDashboard },
+                  { label: 'Projects', onClick: navigateToProjects },
+                  { label: project.name || 'Project', onClick: () => setCurrentPhase(null) },
+                  { label: activePhase.name || 'Site Visit', active: true },
+                ]}
+              />
+
               {/* Report Content: Key Plans & Direct Observations (Key Plan Image is Optional) */}
               {activePhaseFps.length === 0 ? (
                 <div className="space-y-4">
@@ -854,7 +1070,7 @@ export default function ProjectDetail() {
                       <button
                         onClick={() => handleOpenAddFloorPlan(activePhase.uuid)}
                         className="sitepunch-btn-primary px-4 py-2.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-2"
-                        style={{ background: 'var(--brand-button, #1d4ed8)' }}
+                        style={{ background: 'var(--brand-button, #a40e26)' }}
                       >
                         <FileImage size={15} />
                         <span>Upload Key Plan Image</span>
@@ -874,22 +1090,23 @@ export default function ProjectDetail() {
                       <div className="flex items-center justify-between pb-1 gap-2">
                         <div className="flex items-center gap-2">
                           <h4 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
-                            Observations in this Report
+                            Observations in this Site Visit
                           </h4>
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-brand-50 text-brand-700 border border-brand-200/80">
-                            {activePhaseItems.length}
+                            {query ? activePhaseItems.filter(matchesObservation).length : activePhaseItems.length}
                           </span>
                         </div>
                         <button
                           onClick={handleAddNewObservationForPhase}
                           className="sitepunch-btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
-                          style={{ background: 'var(--brand-button, #1d4ed8)' }}
+                          style={{ background: 'var(--brand-button, #a40e26)' }}
                         >
                           <Plus size={13} />
                           <span>Add Observation</span>
                         </button>
                       </div>
                       {activePhaseItems
+                        .filter(matchesObservation)
                         .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
                         .map(item => (
                           <PunchItemRow
@@ -917,28 +1134,37 @@ export default function ProjectDetail() {
                   <div className="space-y-2.5">
                     <div className="flex items-center justify-between pb-1 gap-2">
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-xl bg-brand-50 border border-brand-200/80 flex items-center justify-center text-brand-700 shadow-2xs flex-shrink-0">
+                        <div
+                          className="w-8 h-8 rounded-xl flex items-center justify-center shadow-2xs flex-shrink-0 border"
+                          style={{
+                            color: 'var(--punch-pin-color, #a40e26)',
+                            borderColor: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.35)',
+                            background: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1)',
+                          }}
+                        >
                           <FileImage size={17} className="stroke-[2.2]" />
                         </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-base sm:text-lg font-bold text-gray-900 tracking-tight">
-                              Key Plans
-                            </h3>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-brand-50 text-brand-700 border border-brand-200/80">
-                              {activePhaseFps.length}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-500 mt-0.5">
-                            Drag ⋮⋮ with mouse or finger to reorder sequence
-                          </p>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
+                            Key Plans
+                          </h3>
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border"
+                            style={{
+                              color: 'var(--punch-pin-color, #a40e26)',
+                              borderColor: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.35)',
+                              background: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1)',
+                            }}
+                          >
+                            {query ? displayedActivePhaseFps.length : activePhaseFps.length}
+                          </span>
                         </div>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <button
                           onClick={() => handleOpenAddFloorPlan(activePhase.uuid)}
                           className="sitepunch-btn-primary inline-flex items-center gap-1.5 text-xs font-bold bg-brand-700 hover:bg-brand-800 text-white px-3 py-1.5 rounded-xl transition-colors cursor-pointer shadow-xs"
-                          style={{ background: 'var(--brand-button, #1d4ed8)' }}
+                          style={{ background: 'var(--brand-button, #a40e26)' }}
                           title="Add Key Plan"
                         >
                           <Plus size={14} />
@@ -946,11 +1172,12 @@ export default function ProjectDetail() {
                         </button>
                       </div>
                     </div>
-                    {activePhaseFps.map((fp, idx) => {
+                    {displayedActivePhaseFps.map((fp, idx) => {
                       const fpPunchItems = punchItems
                         .filter(i => i.floorPlanUuid === fp.uuid)
+                        .filter(matchesObservation)
                         .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
-                      const isExpanded = expandedFpUuids.has(fp.uuid)
+                      const isExpanded = query ? true : expandedFpUuids.has(fp.uuid)
 
                       return (
                         <div key={fp.uuid} className="space-y-2">
@@ -982,7 +1209,10 @@ export default function ProjectDetail() {
 
                           {/* Collapsible Accordion: Observations pinned on this Key Plan */}
                           {isExpanded && (
-                            <div className="pl-3 sm:pl-7 pr-1 space-y-2 animate-fade-in border-l-2 border-brand-300 ml-4 sm:ml-6 my-2">
+                            <div
+                              className="pl-3 sm:pl-7 pr-1 space-y-2 animate-fade-in border-l-2 ml-4 sm:ml-6 my-2"
+                              style={{ borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.45)` }}
+                            >
                               {fpPunchItems.length === 0 ? (
                                 <div className="p-3 bg-white/70 rounded-xl border border-gray-200 text-center text-xs text-gray-500">
                                   No observations pinned on this key plan yet.
@@ -1015,34 +1245,46 @@ export default function ProjectDetail() {
                   </div>
 
                   {/* Any direct list observations in this report */}
-                  {activePhaseItems.some(i => !i.floorPlanUuid) && (
+                  {(query ? displayedDirectItems.length > 0 : activePhaseItems.some(i => !i.floorPlanUuid)) && (
                     <div className="space-y-2 pt-2 border-t border-gray-150">
                       <div className="flex items-center justify-between pb-1 gap-2">
-                        <div>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div
+                            className="w-8 h-8 rounded-xl flex items-center justify-center shadow-2xs flex-shrink-0 border"
+                            style={{
+                              color: pinColor || 'var(--punch-pin-color, #a40e26)',
+                              borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.35)`,
+                              background: `rgba(${pinR}, ${pinG}, ${pinB}, 0.1)`,
+                            }}
+                          >
+                            <ClipboardList size={17} className="stroke-[2.2]" />
+                          </div>
                           <div className="flex items-center gap-2">
                             <h4 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
                               Direct List Observations
                             </h4>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-brand-50 text-brand-700 border border-brand-200/80">
-                              {activePhaseItems.filter(i => !i.floorPlanUuid).length}
+                            <span
+                              className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border"
+                              style={{
+                                color: pinColor || 'var(--punch-pin-color, #a40e26)',
+                                borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.35)`,
+                                background: `rgba(${pinR}, ${pinG}, ${pinB}, 0.1)`,
+                              }}
+                            >
+                              {displayedDirectItems.length}
                             </span>
                           </div>
-                          <p className="text-[11px] text-gray-500 mt-0.5">
-                            Drag ⋮⋮ with mouse or finger to reorder sequence
-                          </p>
                         </div>
                         <button
                           onClick={handleAddNewObservationForPhase}
                           className="sitepunch-btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
-                          style={{ background: 'var(--brand-button, #1d4ed8)' }}
+                          style={{ background: 'var(--brand-button, #a40e26)' }}
                         >
                           <Plus size={13} />
                           <span>Add Observation</span>
                         </button>
                       </div>
-                      {activePhaseItems
-                        .filter(i => !i.floorPlanUuid)
-                        .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
+                      {displayedDirectItems
                         .map((item, idx, arr) => (
                           <PunchItemRow
                             key={item.uuid}
@@ -1080,17 +1322,53 @@ export default function ProjectDetail() {
                         ))}
                     </div>
                   )}
+
+                  {/* Empty Search Results Message */}
+                  {query && displayedActivePhaseFps.length === 0 && displayedDirectItems.length === 0 && (
+                    <div className="p-8 text-center bg-white/70 backdrop-blur-md rounded-2xl border border-gray-200 shadow-2xs my-4">
+                      <Search size={32} className="text-gray-300 mx-auto mb-2" />
+                      <h4 className="text-sm font-bold text-gray-800">No observations match "{searchQuery}"</h4>
+                      <p className="text-xs text-gray-400 mt-1 max-w-xs mx-auto">
+                        Try searching by pin number, title, category, room, or drawing name.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        className="mt-3 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors cursor-pointer"
+                      >
+                        Clear Search
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
+
+              {/* Generate Report Button at the end of this page */}
+              <div className="pt-6 pb-10 flex justify-center">
+                <button
+                  type="button"
+                  onClick={openPDFPreview}
+                  className="sitepunch-btn-primary w-full sm:w-auto min-w-[260px] px-8 py-3.5 rounded-2xl text-white font-bold text-sm shadow-md flex items-center justify-center gap-2 hover:opacity-95 transition-all cursor-pointer active:scale-[0.98]"
+                  style={{ background: 'var(--brand-button, #a40e26)' }}
+                >
+                  <FileText size={18} />
+                  <span>Generate Report</span>
+                </button>
+              </div>
             </div>
           ) : (
-            /* ── All Reports View: Click to open and see all floor plans ── */
-            <div className="space-y-3">
-              {filter !== 'All' && (
+            /* ── All Reports View: Interactive Switcher Content (Site Visits, Key Plans, Punch Items, Images) ── */
+            overviewTab === 'sitevisits' ? (
+              <div className="space-y-3">
+              {(filter !== 'All' || siteVisitSearchQuery) && (
                 <div className="flex items-center justify-between px-1 text-xs text-gray-500">
-                  <span>Filtered: <strong className="text-gray-800">{REPORT_FILTER_OPTIONS.find(o => o.id === filter)?.label || filter}</strong> ({filteredPhases.length})</span>
+                  <span>
+                    {filter !== 'All' && <>Filtered: <strong className="text-gray-800">{REPORT_FILTER_OPTIONS.find(o => o.id === filter)?.label || filter}</strong> </>}
+                    {siteVisitSearchQuery && <>Search: <strong className="text-gray-800">"{siteVisitSearchQuery}"</strong> </>}
+                    ({filteredPhases.length})
+                  </span>
                   <button
-                    onClick={() => setFilter('All')}
+                    onClick={() => { setFilter('All'); setSiteVisitSearchQuery('') }}
                     className="text-brand-700 hover:underline font-semibold cursor-pointer"
                   >
                     Clear Filter
@@ -1103,27 +1381,33 @@ export default function ProjectDetail() {
                 <div className="flex flex-col items-center justify-center h-56 text-center liquid-glass-surface rounded-2xl p-6">
                   <ClipboardList size={44} className="text-gray-300 mb-2" />
                   <p className="text-gray-700 font-semibold text-sm">
-                    {phases.length === 0 ? 'No Reports Created' : `No reports match "${filter}"`}
+                    {phases.length === 0
+                      ? 'No Site Visits Created'
+                      : siteVisitSearchQuery
+                      ? `No site visits match "${siteVisitSearchQuery}"`
+                      : `No site visits match "${filter}"`}
                   </p>
                   <p className="text-gray-400 text-xs mt-1 max-w-sm">
                     {phases.length === 0
-                      ? 'Create a report to organize your key plans and observations.'
-                      : 'Try clearing the filter to see all reports.'}
+                      ? 'Create a site visit to organize your key plans and observations.'
+                      : siteVisitSearchQuery
+                      ? 'Try searching with different keywords or clear the search.'
+                      : 'Try clearing the filter to see all site visits.'}
                   </p>
                   {phases.length === 0 ? (
                     <button
                       onClick={() => setShowPhaseModal(true)}
                       className="sitepunch-btn-primary mt-4 text-white px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer"
-                      style={{ background: 'var(--brand-button, #1d4ed8)' }}
+                      style={{ background: 'var(--brand-button, #a40e26)' }}
                     >
-                      <Plus size={14} className="inline mr-1" /> Create First Report
+                      <Plus size={14} className="inline mr-1" /> Create First Site Visit
                     </button>
                   ) : (
                     <button
-                      onClick={() => setFilter('All')}
+                      onClick={() => { setFilter('All'); setSiteVisitSearchQuery('') }}
                       className="text-xs text-brand-700 font-semibold mt-3 hover:underline cursor-pointer"
                     >
-                      Show all reports
+                      Show all site visits
                     </button>
                   )}
                 </div>
@@ -1131,25 +1415,35 @@ export default function ProjectDetail() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
                   {filteredPhases.map(phase => {
                     const formattedDate = phase.visitDate ? formatDatePattern(phase.visitDate) : ''
+                    const phaseFps = floorPlans.filter(fp => fp.phaseUuid === phase.uuid || (!fp.phaseUuid && phase === phases[0]))
+                    const phaseFpUuids = new Set(phaseFps.map(fp => fp.uuid))
+                    const phaseItems = punchItems.filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
 
                     return (
                       <div
                         key={phase.uuid}
                         onClick={() => setCurrentPhase(phase.uuid)}
-                        className="rounded-2xl p-4 sm:p-4.5 cursor-pointer active:scale-[0.99] transition-all duration-200 group relative border border-l-4 hover:-translate-y-0.5"
+                        className="rounded-2xl p-3.5 sm:p-4.5 cursor-pointer active:scale-[0.99] transition-all duration-200 group relative border border-l-4 hover:-translate-y-0.5 overflow-hidden"
                         style={{
-                          borderLeftColor: 'var(--brand-button, #1d4ed8)',
-                          borderColor: 'var(--brand-200, #bfdbfe)',
-                          background: 'linear-gradient(135deg, var(--brand-50, #eff6ff) 0%, #ffffff 45%, var(--brand-50, #eff6ff) 100%)',
-                          boxShadow: '0 4px 18px -2px rgba(var(--brand-button-rgb, 29, 78, 216), 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)',
+                          borderLeftColor: '#7e22ce',
+                          borderColor: 'rgba(216, 180, 254, 0.55)',
+                          background: 'linear-gradient(135deg, rgba(250, 245, 255, 0.95) 0%, #ffffff 45%, rgba(243, 232, 255, 0.75) 100%)',
+                          boxShadow: '0 4px 18px -2px rgba(126, 34, 206, 0.14), 0 2px 6px rgba(0, 0, 0, 0.04)',
                         }}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
-                            <h3 className="font-semibold text-gray-900 text-base truncate">{phase.name}</h3>
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                              <div className="w-7 h-7 rounded-lg bg-purple-50 border border-purple-200/70 flex items-center justify-center text-purple-700 flex-shrink-0 shadow-2xs">
+                                <ClipboardList size={15} className="stroke-[2.2]" />
+                              </div>
+                              <h3 className="font-semibold text-gray-900 text-base truncate group-hover:text-purple-900 transition-colors">
+                                {phase.name}
+                              </h3>
+                            </div>
 
                             {(formattedDate || phase.weather) && (
-                              <div className="flex items-center gap-2 mt-1 flex-wrap text-xs text-gray-500">
+                              <div className="flex items-center gap-2 mt-1.5 flex-wrap text-xs text-gray-500">
                                 {formattedDate && (
                                   <span className="flex items-center gap-1.5 flex-shrink-0">
                                     <Calendar size={13} className="text-gray-400 flex-shrink-0" />
@@ -1187,9 +1481,9 @@ export default function ProjectDetail() {
                                 e.stopPropagation()
                                 setEditingPhase(phase)
                               }}
-                              className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
-                              aria-label="Edit report"
-                              title="Edit report details"
+                              className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-purple-700 flex items-center justify-center cursor-pointer transition-colors"
+                              aria-label="Edit site visit"
+                              title="Edit site visit details"
                             >
                               <Edit2 size={15} />
                             </button>
@@ -1199,12 +1493,27 @@ export default function ProjectDetail() {
                                 handleDeletePhase(phase)
                               }}
                               className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 flex items-center justify-center cursor-pointer transition-colors"
-                              aria-label="Delete report"
-                              title="Delete report"
+                              aria-label="Delete site visit"
+                              title="Delete site visit"
                             >
                               <Trash2 size={15} />
                             </button>
-                            <ChevronRight size={18} className="text-gray-300 group-hover:text-gray-500 group-hover:translate-x-0.5 transition-all ml-1" />
+                            <ChevronRight size={18} className="text-gray-300 group-hover:text-purple-600 group-hover:translate-x-0.5 transition-all ml-1" />
+                          </div>
+                        </div>
+
+                        {/* Key Plans & Observations counter */}
+                        <div className="flex items-center gap-2 mt-3 pt-0.5 min-w-0">
+                          <div className="inline-flex items-center gap-2 sm:gap-3 px-2.5 sm:px-3 py-1 rounded-xl bg-white/70 backdrop-blur-md border border-white/80 shadow-2xs text-xs">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-gray-900">{phaseFps.length}</span>
+                              <span className="text-[11px] text-gray-500 font-medium">Key Plans</span>
+                            </div>
+                            <div className="w-px h-3.5 bg-gray-200/80" />
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-gray-900">{phaseItems.length}</span>
+                              <span className="text-[11px] text-gray-500 font-medium">Observations</span>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1213,86 +1522,307 @@ export default function ProjectDetail() {
                 </div>
               )}
             </div>
-          )
-        )}
+            ) : overviewTab === 'keyplans' ? (
+              /* ── Key Plans Thumbnail Gallery View ── */
+              <div className="space-y-4">
+                {floorPlans.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-56 text-center liquid-glass-surface rounded-2xl p-6">
+                    <FileImage size={44} className="text-gray-300 mb-2" />
+                    <p className="text-gray-700 font-semibold text-sm">No Key Plans Uploaded</p>
+                    <p className="text-gray-400 text-xs mt-1 max-w-sm">
+                      Upload architectural drawings, blueprints, or sketches to pin site observations.
+                    </p>
+                    <button
+                      onClick={() => handleOpenAddFloorPlan()}
+                      className="sitepunch-btn-primary mt-4 text-white px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      style={{ background: 'var(--brand-button, #a40e26)' }}
+                    >
+                      <Plus size={14} /> Add First Key Plan
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {filteredPhases.map((phase, pIdx) => {
+                      const phaseFps = floorPlans.filter(fp => fp.phaseUuid === phase.uuid || (!fp.phaseUuid && phase === phases[0]))
+                      if (phaseFps.length === 0) return null
 
-        {activeTab === 'punchlist' && (
-          <div className="space-y-3">
-            {activePhase && (
-              <div className="pb-1">
-                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-                  Observations ({activePhaseItems.length})
-                </h4>
-                <p className="text-[11px] text-gray-400 mt-0.5">
-                  Field observations recorded in this report
-                </p>
-              </div>
-            )}
-
-            {displayedItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 text-center bg-white rounded-xl border border-gray-100 p-6">
-                <AlertCircle size={36} className="text-gray-300 mb-2" />
-                <p className="text-gray-600 font-semibold text-sm">
-                  {activePhase ? `No observations in ${activePhase.name}` : 'No observations yet'}
-                </p>
-                <p className="text-gray-400 text-xs mt-1 max-w-sm mx-auto">
-                  {activePhase
-                    ? 'Key plans are optional. Tap "Add Observation" to record punch list items with photos, category, and notes.'
-                    : 'Open a report to record punch items.'}
-                </p>
-                {activePhase && (
-                  <button
-                    onClick={handleAddNewObservationForPhase}
-                    className="sitepunch-btn-primary mt-4 bg-brand-700 text-white px-4 py-2 rounded-xl text-xs font-semibold hover:bg-brand-800 shadow-sm flex items-center gap-1.5"
-                    style={{ background: 'var(--brand-button, #1d4ed8)' }}
-                  >
-                    <Plus size={14} />
-                    <span>Add First Observation</span>
-                  </button>
-                )}
-              </div>
-            ) : (
-              (activePhase ? [activePhase] : phases).map((phase, pIdx) => {
-                const phaseFps = floorPlans.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && phase === phases[0]))
-                const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
-                const phaseItems = punchItems
-                  .filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
-                  .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
-
-                if (phaseItems.length === 0) return null
-
-                return (
-                  <div
-                    key={phase.uuid}
-                    className={`space-y-2.5 ${!activePhase && pIdx > 0 ? 'mt-8 pt-5 border-t border-gray-200/90' : 'pt-1'}`}
-                  >
-                    {!activePhase && (
-                      <div className="flex items-center gap-2 px-1 pb-1">
-                        <ClipboardList size={15} className="text-brand-600 flex-shrink-0" />
-                        <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide">
-                          {phase.name} ({phaseItems.length})
-                        </h4>
-                      </div>
-                    )}
-                    {phaseItems.map(item => {
-                      const fp = floorPlans.find(f => f.uuid === item.floorPlanUuid)
                       return (
-                        <PunchItemRow
-                          key={item.uuid}
-                          item={item}
-                          floorPlan={fp}
-                          phase={phase}
-                          showPhase={!activePhase}
-                          onClick={() => { setCurrentPunchItem(item.uuid); openPunchForm() }}
-                          onDelete={() => handleDeletePunchItem(item.uuid)}
-                        />
+                        <div
+                          key={phase.uuid}
+                          className={`space-y-3 ${pIdx > 0 ? 'mt-6 pt-5 border-t border-gray-200/90' : ''}`}
+                        >
+                          <div className="flex items-center justify-between px-1 pb-1">
+                            <div className="flex items-center gap-2">
+                              <ClipboardList size={15} className="text-purple-700 flex-shrink-0" />
+                              <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wide">
+                                {phase.name} ({phaseFps.length})
+                              </h4>
+                            </div>
+                            <button
+                              onClick={() => setCurrentPhase(phase.uuid)}
+                              className="text-xs text-purple-700 hover:text-purple-900 font-semibold hover:underline cursor-pointer flex items-center gap-0.5"
+                            >
+                              Open Visit <ChevronRight size={13} />
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            {phaseFps.map((fp) => {
+                              const fpPins = punchItems.filter(i => i.floorPlanUuid === fp.uuid)
+
+                              return (
+                                <div
+                                  key={fp.uuid}
+                                  onClick={() => navigateToFloorPlan(currentProjectUuid, fp.uuid, fp.phaseUuid || phase.uuid)}
+                                  className="liquid-glass-card rounded-2xl overflow-hidden cursor-pointer group transition-all duration-200 hover:-translate-y-1 hover:shadow-lg border border-l-4 flex flex-col"
+                                  style={{
+                                    borderLeftColor: pinColor || 'var(--punch-pin-color, #a40e26)',
+                                    borderColor: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.3)',
+                                    background: 'linear-gradient(135deg, rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.04) 0%, #ffffff 40%, rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.08) 100%)',
+                                    boxShadow: '0 4px 18px -2px rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)',
+                                  }}
+                                >
+                                  {/* Thumbnail Area */}
+                                  <div className="relative w-full h-44 bg-slate-900/5 overflow-hidden flex items-center justify-center border-b border-gray-100">
+                                    {fp.imageData || fp.imageUrl ? (
+                                      <img
+                                        src={fp.imageData || fp.imageUrl}
+                                        alt={fp.name}
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                      />
+                                    ) : (
+                                      <div className="flex flex-col items-center justify-center text-gray-400">
+                                        <FileImage size={40} className="mb-1 opacity-60" />
+                                        <span className="text-[11px] font-medium text-gray-400">Blueprint Drawing</span>
+                                      </div>
+                                    )}
+
+                                    {/* Pins Count Badge Overlay */}
+                                    <div
+                                      className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full text-xs font-black text-white shadow-md flex items-center gap-1 backdrop-blur-xs"
+                                      style={{ background: pinColor || 'var(--punch-pin-color, #a40e26)' }}
+                                    >
+                                      <span>{fpPins.length}</span>
+                                      <span className="text-[10px] font-bold opacity-90">{fpPins.length === 1 ? 'PIN' : 'PINS'}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Card Content & Meta */}
+                                  <div className="p-3.5 flex items-center justify-between gap-2 flex-1">
+                                    <div className="min-w-0 flex-1">
+                                      <h3 className="font-bold text-gray-900 text-sm truncate group-hover:text-brand-700 transition-colors">
+                                        {fp.name}
+                                      </h3>
+                                      <p className="text-xs text-gray-500 font-medium mt-0.5">
+                                        {fpPins.length} observation{fpPins.length !== 1 ? 's' : ''}
+                                      </p>
+                                    </div>
+
+                                    <div className="flex items-center gap-1 flex-shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setRenamingFp(fp)
+                                        }}
+                                        className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-gray-700 transition-colors"
+                                        title="Rename key plan"
+                                      >
+                                        <Edit2 size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          handleDeleteFloorPlan(fp.uuid, fp.name)
+                                        }}
+                                        className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 transition-colors"
+                                        title="Delete key plan"
+                                      >
+                                        <Trash2 size={14} />
+                                      </button>
+                                      <ChevronRight size={18} className="text-gray-300 group-hover:text-brand-600 group-hover:translate-x-0.5 transition-all ml-1" />
+                                    </div>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
                       )
                     })}
                   </div>
-                )
-              })
-            )}
-          </div>
+                )}
+              </div>
+            ) : overviewTab === 'punchitems' ? (
+              /* ── All Punch Items View ── */
+              <div className="space-y-4">
+                {punchItems.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-56 text-center liquid-glass-surface rounded-2xl p-6">
+                    <AlertCircle size={44} className="text-gray-300 mb-2" />
+                    <p className="text-gray-700 font-semibold text-sm">No Punch Items Recorded</p>
+                    <p className="text-gray-400 text-xs mt-1 max-w-sm">
+                      Record punch list items with photos, categories, and notes.
+                    </p>
+                    <button
+                      onClick={handleAddNewObservationForPhase}
+                      className="sitepunch-btn-primary mt-4 text-white px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      style={{ background: 'var(--brand-button, #a40e26)' }}
+                    >
+                      <Plus size={14} /> Add First Observation
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    {filteredPhases.map((phase, pIdx) => {
+                      const phaseFps = floorPlans.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && phase === phases[0]))
+                      const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
+                      const phaseItems = punchItems
+                        .filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
+                        .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
+
+                      if (phaseItems.length === 0) return null
+
+                      return (
+                        <div
+                          key={phase.uuid}
+                          className={`space-y-2.5 ${pIdx > 0 ? 'mt-6 pt-5 border-t border-gray-200/90' : ''}`}
+                        >
+                          <div className="flex items-center justify-between px-1 pb-1">
+                            <div className="flex items-center gap-2">
+                              <ClipboardList size={15} className="text-purple-700 flex-shrink-0" />
+                              <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wide">
+                                {phase.name} ({phaseItems.length})
+                              </h4>
+                            </div>
+                            <button
+                              onClick={() => setCurrentPhase(phase.uuid)}
+                              className="text-xs text-purple-700 hover:text-purple-900 font-semibold hover:underline cursor-pointer flex items-center gap-0.5"
+                            >
+                              Open Visit <ChevronRight size={13} />
+                            </button>
+                          </div>
+                          <div className="space-y-2">
+                            {phaseItems.map(item => {
+                              const fp = floorPlans.find(f => f.uuid === item.floorPlanUuid)
+                              return (
+                                <PunchItemRow
+                                  key={item.uuid}
+                                  item={item}
+                                  floorPlan={fp}
+                                  phase={phase}
+                                  showPhase={true}
+                                  onClick={() => { setCurrentPunchItem(item.uuid); openPunchForm() }}
+                                  onDelete={() => handleDeletePunchItem(item.uuid)}
+                                />
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* ── Images Gallery View ── */
+              <div className="space-y-4">
+                {galleryPhotos.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-56 text-center liquid-glass-surface rounded-2xl p-6">
+                    <Camera size={44} className="text-gray-300 mb-2" />
+                    <p className="text-gray-700 font-semibold text-sm">No Images Captured</p>
+                    <p className="text-gray-400 text-xs mt-1 max-w-sm">
+                      Photos added to observations across all site visits will appear in this unified gallery.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {filteredPhases.map((phase, pIdx) => {
+                      const phaseFps = floorPlans.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && phase === phases[0]))
+                      const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
+                      const phaseItemUuids = new Set(
+                        punchItems
+                          .filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
+                          .map(i => i.uuid)
+                      )
+                      const phasePhotos = galleryPhotos.filter(ph => phaseItemUuids.has(ph.punchItemUuid))
+
+                      if (phasePhotos.length === 0) return null
+
+                      return (
+                        <div
+                          key={phase.uuid}
+                          className={`space-y-3 ${pIdx > 0 ? 'mt-6 pt-5 border-t border-gray-200/90' : ''}`}
+                        >
+                          <div className="flex items-center justify-between px-1 pb-1">
+                            <div className="flex items-center gap-2">
+                              <ClipboardList size={15} className="text-purple-700 flex-shrink-0" />
+                              <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wide">
+                                {phase.name} ({phasePhotos.length})
+                              </h4>
+                            </div>
+                            <button
+                              onClick={() => setCurrentPhase(phase.uuid)}
+                              className="text-xs text-purple-700 hover:text-purple-900 font-semibold hover:underline cursor-pointer flex items-center gap-0.5"
+                            >
+                              Open Visit <ChevronRight size={13} />
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                            {phasePhotos.map((photo) => {
+                              const item = punchItems.find(i => i.uuid === photo.punchItemUuid)
+                              const fp = item ? floorPlans.find(f => f.uuid === item.floorPlanUuid) : null
+                              const imgSrc = photo.imageData || photo.dataUrl
+
+                              if (!imgSrc) return null
+
+                              return (
+                                <div
+                                  key={photo.uuid || photo.id}
+                                  onClick={() => setPreviewPhoto({ photo, item, phase, floorPlan: fp })}
+                                  className="relative aspect-square rounded-2xl overflow-hidden cursor-pointer group bg-slate-900/5 border border-white/80 shadow-2xs hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
+                                >
+                                  <img
+                                    src={imgSrc}
+                                    alt={item?.title || 'Observation photo'}
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                    loading="lazy"
+                                  />
+
+                                  {/* Top pin number badge */}
+                                  {item?.itemNumber && (
+                                    <div
+                                      className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-[11px] font-black text-white shadow-md flex items-center gap-0.5"
+                                      style={{ background: pinColor || 'var(--punch-pin-color, #a40e26)' }}
+                                    >
+                                      <span>#{item.itemNumber}</span>
+                                    </div>
+                                  )}
+
+                                  {/* Bottom hover details */}
+                                  <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/85 via-black/40 to-transparent text-white opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end">
+                                    <p className="text-[11px] font-bold truncate">
+                                      {item?.title || item?.notes || `Item #${item?.itemNumber || ''}`}
+                                    </p>
+                                    {fp && (
+                                      <p className="text-[10px] text-white/80 truncate mt-0.5">
+                                        {fp.name}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          )
         )}
       </main>
 
@@ -1305,25 +1835,37 @@ export default function ProjectDetail() {
         }}
       >
         {!activePhase ? (
-          <button
-            onClick={() => { setEditingPhase(null); setShowPhaseModal(true) }}
-            className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm"
-            style={{ background: 'var(--brand-button, #1d4ed8)' }}
-            title="Create a new report"
-          >
-            <Plus size={20} />
-            New Report
-          </button>
-        ) : activeTab === 'punchlist' ? (
-          <button
-            onClick={handleAddNewObservationForPhase}
-            className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm"
-            style={{ background: 'var(--brand-button, #1d4ed8)' }}
-            title="Add Observation"
-          >
-            <Plus size={20} />
-            Add Observation
-          </button>
+          overviewTab === 'keyplans' ? (
+            <button
+              onClick={() => handleOpenAddFloorPlan()}
+              className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm cursor-pointer"
+              style={{ background: 'var(--brand-button, #a40e26)' }}
+              title="Add Key Plan"
+            >
+              <Plus size={20} />
+              Add Key Plan
+            </button>
+          ) : overviewTab === 'punchitems' ? (
+            <button
+              onClick={handleAddNewObservationForPhase}
+              className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm cursor-pointer"
+              style={{ background: 'var(--brand-button, #a40e26)' }}
+              title="Add Observation"
+            >
+              <Plus size={20} />
+              Add Observation
+            </button>
+          ) : (
+            <button
+              onClick={() => { setEditingPhase(null); setShowPhaseModal(true) }}
+              className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm cursor-pointer"
+              style={{ background: 'var(--brand-button, #a40e26)' }}
+              title="Create a new site visit"
+            >
+              <Plus size={20} />
+              New Site Visit
+            </button>
+          )
         ) : (
           <div
             className="relative flex flex-col items-end"
@@ -1347,7 +1889,10 @@ export default function ProjectDetail() {
                 }}
                 className="liquid-glass-surface flex items-center gap-2.5 px-4 py-2.5 rounded-full text-slate-800 text-xs font-bold transition-all hover:scale-105 whitespace-nowrap cursor-pointer shadow-xl hover:bg-white"
               >
-                <div className="w-6 h-6 rounded-full bg-blue-500/15 text-brand-700 flex items-center justify-center flex-shrink-0">
+                <div
+                  className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{ color: 'var(--punch-pin-color, #a40e26)', background: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.15)' }}
+                >
                   <FileImage size={14} />
                 </div>
                 <span>Add Key Plan</span>
@@ -1362,7 +1907,10 @@ export default function ProjectDetail() {
                 }}
                 className="liquid-glass-surface flex items-center gap-2.5 px-4 py-2.5 rounded-full text-slate-800 text-xs font-bold transition-all hover:scale-105 whitespace-nowrap cursor-pointer shadow-xl hover:bg-white"
               >
-                <div className="w-6 h-6 rounded-full bg-blue-500/15 text-brand-700 flex items-center justify-center flex-shrink-0">
+                <div
+                  className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{ color: 'var(--punch-pin-color, #a40e26)', background: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.15)' }}
+                >
                   <Plus size={14} />
                 </div>
                 <span>Add Observation</span>
@@ -1374,7 +1922,7 @@ export default function ProjectDetail() {
               type="button"
               onClick={() => setFabOpen(o => !o)}
               className="sitepunch-fab flex items-center gap-2 text-white px-5 py-3.5 rounded-full shadow-2xl transition-all font-semibold text-sm cursor-pointer"
-              style={{ background: 'var(--brand-button, #1d4ed8)' }}
+              style={{ background: 'var(--brand-button, #a40e26)' }}
               title="Add Key Plan or Observation"
             >
               <Plus
@@ -1422,6 +1970,88 @@ export default function ProjectDetail() {
           }}
         />
       )}
+
+      {/* ── Photo Preview Lightbox Modal ── */}
+      {previewPhoto && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 backdrop-blur-md flex flex-col justify-between p-4 sm:p-6 animate-fade-in select-none"
+          onClick={() => setPreviewPhoto(null)}
+        >
+          {/* Top Header */}
+          <div
+            className="flex items-center justify-between max-w-5xl mx-auto w-full text-white pb-3 flex-shrink-0"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              {previewPhoto.item?.itemNumber && (
+                <span
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 shadow-sm text-white"
+                  style={{ background: pinColor || 'var(--punch-pin-color, #a40e26)' }}
+                >
+                  #{previewPhoto.item.itemNumber}
+                </span>
+              )}
+              <div className="min-w-0">
+                <h3 className="font-bold text-sm sm:text-base truncate">
+                  {previewPhoto.item?.title || previewPhoto.item?.notes || 'Photo Preview'}
+                </h3>
+                <p className="text-xs text-white/70 truncate mt-0.5">
+                  {previewPhoto.phase?.name ? `${previewPhoto.phase.name} ` : ''}
+                  {previewPhoto.floorPlan?.name ? `• ${previewPhoto.floorPlan.name}` : ''}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+              {previewPhoto.item && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const itemUuid = previewPhoto.item.uuid
+                    setPreviewPhoto(null)
+                    setCurrentPunchItem(itemUuid)
+                    openPunchForm()
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm"
+                >
+                  <Edit2 size={13} /> Edit Item
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setPreviewPhoto(null)}
+                className="p-2 rounded-full hover:bg-white/20 text-white transition-colors cursor-pointer"
+                aria-label="Close photo preview"
+                title="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+          </div>
+
+          {/* Center Image Container */}
+          <div
+            className="flex-1 flex items-center justify-center min-h-0 py-2 w-full"
+            onClick={e => e.stopPropagation()}
+          >
+            <img
+              src={previewPhoto.photo.imageData || previewPhoto.photo.dataUrl}
+              alt={previewPhoto.item?.title || 'Observation photo'}
+              className="max-h-[78vh] max-w-full object-contain rounded-xl shadow-2xl"
+            />
+          </div>
+
+          {/* Bottom Caption / Notes */}
+          {previewPhoto.item?.notes && (
+            <div
+              className="max-w-2xl mx-auto w-full text-center text-white/90 text-xs sm:text-sm bg-black/50 backdrop-blur-md rounded-xl p-3 mt-2 border border-white/10 flex-shrink-0"
+              onClick={e => e.stopPropagation()}
+            >
+              <p className="line-clamp-2">{previewPhoto.item.notes}</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1450,7 +2080,7 @@ function TabBtn({ label, icon, active, onClick }) {
       className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-semibold border-b-2 transition-colors ${
         active ? 'border-brand-600 text-brand-700' : 'border-transparent text-gray-500'
       }`}
-      style={active ? { borderColor: 'var(--brand-color, #1d4ed8)', color: 'var(--brand-button, #1d4ed8)' } : {}}
+      style={active ? { borderColor: 'var(--brand-color, #a40e26)', color: 'var(--brand-button, #a40e26)' } : {}}
     >
       {icon}{label}
     </button>
@@ -1466,6 +2096,7 @@ function FloorPlanCard({
   isExpanded = false, onToggleAccordion,
 }) {
   const pinColor = useAppStore(s => s.pinColor)
+  const { r, g, b } = hexToRgb(pinColor)
   const sorted = [...punchItems].sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
   const minNum = sorted.length > 0 ? sorted[0].itemNumber : null
   const maxNum = sorted.length > 0 ? sorted[sorted.length - 1].itemNumber : null
@@ -1479,14 +2110,19 @@ function FloorPlanCard({
       onDrop={(e) => onDrop(e, fp.uuid)}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`liquid-glass-card rounded-2xl p-3.5 cursor-pointer flex gap-3 items-center group transition-all select-none ${
+      className={`liquid-glass-card rounded-2xl p-3.5 cursor-pointer flex gap-3 items-center group transition-all select-none border border-l-4 ${
         isDragging
           ? 'opacity-40 border-dashed border-brand-400 scale-[0.98]'
           : isDragOver
             ? 'ring-2 ring-brand-400 scale-[1.01]'
             : 'hover:shadow-md'
       }`}
-      style={{ borderLeft: '4px solid var(--brand-button, #1d4ed8)' }}
+      style={{
+        borderLeftColor: pinColor || 'var(--punch-pin-color, #a40e26)',
+        borderColor: `rgba(${r}, ${g}, ${b}, 0.35)`,
+        background: `linear-gradient(135deg, rgba(${r}, ${g}, ${b}, 0.05) 0%, #ffffff 50%, rgba(${r}, ${g}, ${b}, 0.09) 100%)`,
+        boxShadow: `0 4px 18px -2px rgba(${r}, ${g}, ${b}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,
+      }}
     >
       {/* Drag Grip Handle for Mouse and Touch / Finger */}
       <div
@@ -1517,7 +2153,7 @@ function FloorPlanCard({
               ? 'ring-2 ring-offset-2 ring-emerald-500 scale-[1.02]'
               : 'hover:opacity-95 hover:scale-[1.03]'
           }`}
-          style={{ background: pinColor || '#10b981' }}
+          style={{ background: pinColor || 'var(--punch-pin-color, #a40e26)' }}
           title={isExpanded ? 'Collapse observations' : `Show ${sorted.length} observation${sorted.length === 1 ? '' : 's'} (accordion)`}
         >
           <span className="text-xs uppercase font-black text-white leading-tight tracking-wider flex items-center gap-0.5">
@@ -1625,6 +2261,7 @@ function PunchItemRow({
   onTouchEndGrip,
 }) {
   const pinColor = useAppStore(s => s.pinColor)
+  const { r, g, b } = hexToRgb(pinColor)
   return (
     <div
       data-item-uuid={item.uuid}
@@ -1634,14 +2271,19 @@ function PunchItemRow({
       onDrop={(e) => onDrop && onDrop(e, item.uuid)}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`liquid-glass-card rounded-2xl p-3.5 flex gap-3 items-center cursor-pointer group transition-all select-none ${
+      className={`liquid-glass-card rounded-2xl p-3.5 flex gap-3 items-center cursor-pointer group transition-all select-none border border-l-4 ${
         isDragging
           ? 'opacity-40 border-dashed border-brand-400 scale-[0.98]'
           : isDragOver
             ? 'ring-2 ring-brand-400 scale-[1.01]'
             : 'active:scale-[0.99] hover:shadow-md'
       }`}
-      style={{ borderLeft: '4px solid var(--brand-button, #1d4ed8)' }}
+      style={{
+        borderLeftColor: pinColor || 'var(--punch-pin-color, #a40e26)',
+        borderColor: `rgba(${r}, ${g}, ${b}, 0.35)`,
+        background: `linear-gradient(135deg, rgba(${r}, ${g}, ${b}, 0.05) 0%, #ffffff 50%, rgba(${r}, ${g}, ${b}, 0.09) 100%)`,
+        boxShadow: `0 4px 18px -2px rgba(${r}, ${g}, ${b}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,
+      }}
     >
       {/* Drag Grip Handle for Mouse and Touch / Finger */}
       {draggable && (
@@ -1664,7 +2306,7 @@ function PunchItemRow({
       {/* Observation Pin Number */}
       <div
         className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 shadow-sm text-white"
-        style={{ background: pinColor || '#ef4444' }}
+        style={{ background: pinColor || 'var(--punch-pin-color, #a40e26)' }}
       >
         {item.itemNumber}
       </div>

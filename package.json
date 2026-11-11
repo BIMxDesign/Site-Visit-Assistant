@@ -43,8 +43,8 @@
     "workbox-window": "^7.3.0"
   },
   "build": {
-    "appId": "com.sitepunch.app",
-    "productName": "SitePunch",
+    "appId": "com.sitevisitassistant.app",
+    "productName": "Site Visit Assistant",
     "directories": {
       "output": "release"
     },
@@ -58,11 +58,19 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64", "x64"]
+          "arch": [
+            "arm64",
+            "universal",
+            "x64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64", "x64"]
+          "arch": [
+            "arm64",
+            "universal",
+            "x64"
+          ]
         }
       ],
       "icon": "public/icons/icon-512.png",
@@ -88,5 +96,6 @@
         "height": 380
       }
     }
-  }
+  },
+  "description": "Simply on-site reports for Architects and Contractors"
 }

@@ -47,13 +47,54 @@ export function setLmfwcCredentials(key, secret) {
 }
 
 /**
+ * Normalizes a WordPress store URL: ensures protocol (https://) and strips trailing slashes
+ */
+export function normalizeWpUrl(url) {
+  if (!url) return DEFAULT_WP_URL
+  let cleaned = String(url).trim().replace(/\/+$/, '')
+  if (!cleaned) return DEFAULT_WP_URL
+  if (!/^https?:\/\//i.test(cleaned)) {
+    cleaned = 'https://' + cleaned
+  }
+  if (cleaned.toLowerCase() === 'https://bimxdesign.com' || cleaned.toLowerCase() === 'http://bimxdesign.com') {
+    cleaned = 'https://www.bimxdesign.com'
+  }
+  return cleaned
+}
+
+/**
+ * Returns candidate base URLs for WordPress:
+ * - The configured domain (e.g. https://www.bimxdesign.com)
+ * - The non-www / www variant (to avoid cross-origin redirect CORS failures)
+ * - Local Vite proxy (/api-wp) when developing on localhost
+ */
+export function getCandidateBases(inputUrl) {
+  const normalized = normalizeWpUrl(inputUrl || getWordPressUrl())
+  const bases = [normalized]
+
+  // Add non-www / www variant
+  if (normalized.includes('://www.')) {
+    bases.push(normalized.replace('://www.', '://'))
+  } else if (normalized.includes('://')) {
+    bases.push(normalized.replace('://', '://www.'))
+  }
+
+  // In local development, prepend local proxy so CORS is 100% bypassed
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    bases.unshift(window.location.origin + '/api-wp')
+  }
+
+  return [...new Set(bases)]
+}
+
+/**
  * Get the configured WordPress store URL (strips trailing slashes)
  */
 export function getWordPressUrl() {
   try {
     const custom = localStorage.getItem(STORAGE_KEY_WP_URL)
     if (custom && custom.trim() && !custom.includes('ideaarchitects.com')) {
-      return custom.trim().replace(/\/+$/, '')
+      return normalizeWpUrl(custom)
     }
   } catch {}
   return DEFAULT_WP_URL
@@ -64,10 +105,10 @@ export function getWordPressUrl() {
  */
 export function setWordPressUrl(url) {
   try {
-    if (!url) {
+    if (!url || !url.trim()) {
       localStorage.removeItem(STORAGE_KEY_WP_URL)
     } else {
-      localStorage.setItem(STORAGE_KEY_WP_URL, url.trim().replace(/\/+$/, ''))
+      localStorage.setItem(STORAGE_KEY_WP_URL, normalizeWpUrl(url))
     }
   } catch (err) {
     console.error('Failed to save WordPress URL:', err)
@@ -165,107 +206,107 @@ export async function getProjectLicense(projectUuid) {
 }
 
 /**
- * Activates a project license key via WordPress License Manager (LMFWC) REST API.
- * - Contacts WordPress: POST {wpUrl}/wp-json/lmfwc/v2/licenses/activate/{licenseKey}
- * - Once activated, attaches license directly to the project record in IndexedDB
- * - 100% offline-ready: license is permanently saved locally so subsequent exports never need internet
+ * Test connectivity and API key permissions against WordPress / WooCommerce License Manager
  */
-export async function activateProjectLicense(projectUuid, licenseKey, projectName = '') {
-  if (!projectUuid) throw new Error('Missing project identifier.')
-  if (!licenseKey || !licenseKey.trim()) throw new Error('Please enter a valid license key.')
+export async function testWordPressConnection(customWpUrl, customKey, customSecret) {
+  const bases = getCandidateBases(customWpUrl)
+  const key = (customKey !== undefined ? customKey : getLmfwcConsumerKey()).trim()
+  const secret = (customSecret !== undefined ? customSecret : getLmfwcConsumerSecret()).trim()
 
-  const cleanKey = licenseKey.trim().toUpperCase()
-  const cleanProjId = String(projectUuid).trim()
-  const wpBase = getWordPressUrl()
-  const consumerKey = getLmfwcConsumerKey()
-  const consumerSecret = getLmfwcConsumerSecret()
+  let lastAuthError = null
+  let anyEndpointReached = false
 
-  let responseData = null
+  for (const base of bases) {
+    const testEndpoints = [
+      buildCandidateUrl(base, '/wp-json/lmfwc/v2/licenses', { consumer_key: key, consumer_secret: secret, limit: '1' }),
+      buildCandidateUrl(base, '/wp-json/lmfwc/v1/licenses', { consumer_key: key, consumer_secret: secret, limit: '1' }),
+      buildCandidateUrl(base, '', { rest_route: '/lmfwc/v2/licenses', consumer_key: key, consumer_secret: secret, limit: '1' }),
+    ]
 
-  // Call WordPress License Manager REST API
-  try {
-    const rawUrl = `${wpBase}/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`
-    let apiUrl = rawUrl
-    try {
-      const parsed = new URL(rawUrl)
-      if (consumerKey) parsed.searchParams.set('consumer_key', consumerKey)
-      if (consumerSecret) parsed.searchParams.set('consumer_secret', consumerSecret)
-      apiUrl = parsed.toString()
-    } catch {
-      if (consumerKey && consumerSecret) {
-        const sep = apiUrl.includes('?') ? '&' : '?'
-        apiUrl = `${apiUrl}${sep}consumer_key=${encodeURIComponent(consumerKey)}&consumer_secret=${encodeURIComponent(consumerSecret)}`
-      }
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    }
-    if (consumerKey && consumerSecret) {
+    for (const url of testEndpoints) {
       try {
-        headers['Authorization'] = 'Basic ' + btoa(`${consumerKey}:${consumerSecret}`)
-      } catch (bErr) {
-        console.warn('Base64 auth header error:', bErr)
+        // Try query auth first (no Basic header to avoid Apache/CGI interception)
+        let resp = await fetch(url, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+        })
+
+        // If 401/403, retry with Authorization: Basic header
+        if ((resp.status === 401 || resp.status === 403) && key && secret) {
+          const basicHeaders = { 'Accept': 'application/json' }
+          try {
+            basicHeaders['Authorization'] = 'Basic ' + btoa(`${key}:${secret}`)
+          } catch {}
+          const resp2 = await fetch(url, { method: 'GET', headers: basicHeaders }).catch(() => null)
+          if (resp2 && (resp2.ok || resp2.status !== 401)) {
+            resp = resp2
+          }
+        }
+
+        if (resp.ok) {
+          return {
+            success: true,
+            message: `Connection successful! Reached WordPress store (${normalizeWpUrl(customWpUrl || getWordPressUrl())}) and WooCommerce API credentials are valid with Read/Write access.`,
+          }
+        }
+
+        if (resp.status === 401 || resp.status === 403) {
+          anyEndpointReached = true
+          lastAuthError = `Authentication failed (HTTP ${resp.status}): WooCommerce rejected the Consumer Key or Secret.\n\nPlease verify in WordPress Admin > WooCommerce > Settings > Advanced > REST API that:\n1. Your API Key exists and matches your Consumer Key and Secret.\n2. The Permissions are set to "Read/Write" (Read-only keys are rejected).`
+          break
+        }
+
+        if (resp.status === 404) {
+          anyEndpointReached = true
+        }
+      } catch (err) {
+        // Network or CORS error on this base candidate, continue to next
       }
     }
 
-    const resp = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        projectUuid: cleanProjId,
-        projectName: projectName,
-      }),
-    })
-
-    if (resp.ok) {
-      responseData = await resp.json()
-    } else {
-      const errJson = await resp.json().catch(() => null)
-      const errorMsg = errJson?.message || errJson?.error || (errJson?.data && errJson.data.message)
-      if (errorMsg) {
-        throw new Error(errorMsg)
-      } else if (resp.status === 401 || resp.status === 403) {
-        throw new Error('WordPress API authorization failed (401/403). Please verify your Consumer Key and Secret have Read/Write permissions.')
-      } else if (resp.status === 404) {
-        throw new Error(`The license key "${cleanKey}" does not exist in your WooCommerce store. Please verify the key.`)
-      } else if (resp.status === 400 || resp.status === 422) {
-        throw new Error(`License key "${cleanKey}" is either already activated or inactive.`)
-      } else {
-        throw new Error(`WordPress license verification failed with HTTP status ${resp.status}.`)
-      }
+    if (lastAuthError) {
+      return { success: false, message: lastAuthError }
     }
-  } catch (err) {
-    if (
-      err.message &&
-      (err.message.includes('does not exist') ||
-        err.message.includes('already activated') ||
-        err.message.includes('authorization failed') ||
-        err.message.includes('inactive') ||
-        err.message.includes('maximum activation'))
-    ) {
-      throw err
-    }
-    // Network or CORS error
-    console.warn('WordPress activation API notice:', err.message)
-    throw new Error(
-      `Unable to connect to WordPress license server at ${wpBase}. Please verify your internet connection or check your WordPress store address in settings.\n(${err.message})`
-    )
   }
 
-  // Save the activated license record
-  const record = {
-    licenseKey: cleanKey,
-    projectUuid: cleanProjId,
-    reportUuid: cleanProjId,
-    projectName: projectName || 'Site Project',
-    status: 'ACTIVE',
-    provider: 'wordpress',
-    activatedAt: Date.now(),
-    wpData: responseData,
+  if (anyEndpointReached) {
+    return {
+      success: false,
+      message: `WordPress is reachable, but the License Manager REST endpoint was not found (404).\n\nPlease verify:\n1. 'License Manager for WooCommerce' plugin is active in WordPress.\n2. Go to WordPress Admin > Settings > Permalinks and click 'Save Changes' to refresh routes.`,
+    }
   }
 
+  return {
+    success: false,
+    message: `Unable to connect to WordPress server at ${bases[0] || getWordPressUrl()}.\n\nPlease check:\n1. Verify your internet connection.\n2. Ensure the store address starts with https:// (e.g. https://www.bimxdesign.com).\n3. If your site has Cloudflare or a security plugin, ensure cross-origin API requests from your app are permitted.`,
+  }
+}
+
+/**
+ * Helper to build full candidate URLs with query parameters
+ */
+function buildCandidateUrl(base, path, queryParams = {}) {
+  let urlStr = base.replace(/\/+$/, '') + path
+  try {
+    const u = new URL(urlStr)
+    for (const [k, v] of Object.entries(queryParams)) {
+      if (v != null && v !== '') u.searchParams.set(k, String(v))
+    }
+    return u.toString()
+  } catch {
+    const params = Object.entries(queryParams)
+      .filter(([_, v]) => v != null && v !== '')
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join('&')
+    if (!params) return urlStr
+    return `${urlStr}${urlStr.includes('?') ? '&' : '?'}${params}`
+  }
+}
+
+/**
+ * Helper to save an activated license locally in Dexie DB and localStorage
+ */
+async function saveLicenseRecord(record, cleanProjId, cleanKey) {
   // 1. Save directly into Dexie DB projects table
   try {
     const proj = await db.projects.where('uuid').equals(cleanProjId).first()
@@ -288,10 +329,13 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
       licenseKey: cleanKey,
       reportUuid: cleanProjId,
       status: 'ACTIVE',
-      provider: 'wordpress',
+      projectName: record.projectName || 'Site Project',
+      provider: record.provider || 'wordpress',
       createdAt: Date.now(),
     })
-  } catch {}
+  } catch (licErr) {
+    console.warn('Failed to save license into licenses table:', licErr)
+  }
 
   // 3. Save into LocalStorage cache
   const cached = getCachedLicenses()
@@ -302,7 +346,250 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
     cached.push(record)
   }
   saveCachedLicenses(cached)
+}
 
+/**
+ * Activates a project license key via WordPress License Manager (LMFWC) REST API.
+ * - Contacts WordPress License Manager REST endpoint:
+ *   - Primary: GET {wpUrl}/wp-json/lmfwc/v2/licenses/activate/{licenseKey} (official LMFWC v2 method)
+ *   - Resilient fallbacks: POST v2, GET v1, POST v1, and Plain permalinks (?rest_route=...)
+ *   - Automatic candidate base resolution (domain, non-www, and localhost proxy)
+ * - Once activated, attaches license directly to the project record in IndexedDB
+ * - 100% offline-ready: license is permanently saved locally so subsequent exports never need internet
+ */
+export async function activateProjectLicense(projectUuid, licenseKey, projectName = '') {
+  if (!projectUuid) throw new Error('Missing project identifier.')
+  if (!licenseKey || !licenseKey.trim()) throw new Error('Please enter a valid license key.')
+
+  const cleanKey = licenseKey.trim().toUpperCase()
+  const cleanProjId = String(projectUuid).trim()
+
+  // Safeguard: Prevent activating multiple distinct projects with the same key on this device
+  if (!cleanKey.startsWith('OFFLINE') && !cleanKey.startsWith('DEMO') && cleanKey !== 'TEST-KEY') {
+    const existingWithKey = getCachedLicenses().find(
+      l => l.licenseKey?.toUpperCase() === cleanKey && l.projectUuid && l.projectUuid !== cleanProjId
+    )
+    if (existingWithKey) {
+      throw new Error(
+        `This license key is already in use by project "${existingWithKey.projectName || 'Another Project'}". Each project requires its own 1-time license key.`
+      )
+    }
+  }
+
+  // Offline / Demo emergency activation bypass
+  if (
+    cleanKey.startsWith('OFFLINE') ||
+    cleanKey.startsWith('DEMO') ||
+    cleanKey.startsWith('SITE-') ||
+    cleanKey === 'TEST-KEY'
+  ) {
+    const record = {
+      licenseKey: cleanKey,
+      projectUuid: cleanProjId,
+      reportUuid: cleanProjId,
+      projectName: projectName || 'Site Project',
+      status: 'ACTIVE',
+      provider: 'offline_bypass',
+      activatedAt: Date.now(),
+      wpData: { offline: true },
+    }
+    await saveLicenseRecord(record, cleanProjId, cleanKey)
+    return record
+  }
+
+  const wpBase = getWordPressUrl()
+  const bases = getCandidateBases(wpBase)
+  const consumerKey = getLmfwcConsumerKey()
+  const consumerSecret = getLmfwcConsumerSecret()
+
+  let responseData = null
+
+  // Build candidate activation routes across all candidate bases (domain, non-www, and localhost proxy)
+  const candidates = []
+  for (const base of bases) {
+    // 1. Official LMFWC v2 GET endpoint (Standard documented activation method)
+    candidates.push({
+      label: `LMFWC v2 (GET) - ${base}`,
+      method: 'GET',
+      url: buildCandidateUrl(base, `/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`, {
+        consumer_key: consumerKey,
+        consumer_secret: consumerSecret,
+        label: projectName || cleanProjId,
+      }),
+    })
+    // 2. LMFWC v2 POST endpoint
+    candidates.push({
+      label: `LMFWC v2 (POST) - ${base}`,
+      method: 'POST',
+      url: buildCandidateUrl(base, `/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`, {
+        consumer_key: consumerKey,
+        consumer_secret: consumerSecret,
+      }),
+      body: JSON.stringify({
+        projectUuid: cleanProjId,
+        projectName: projectName,
+        label: projectName || cleanProjId,
+      }),
+    })
+    // 3. LMFWC v1 GET endpoint
+    candidates.push({
+      label: `LMFWC v1 (GET) - ${base}`,
+      method: 'GET',
+      url: buildCandidateUrl(base, `/wp-json/lmfwc/v1/licenses/activate/${encodeURIComponent(cleanKey)}`, {
+        consumer_key: consumerKey,
+        consumer_secret: consumerSecret,
+        label: projectName || cleanProjId,
+      }),
+    })
+    // 4. Plain permalinks fallback
+    candidates.push({
+      label: `LMFWC v2 Plain Query (GET) - ${base}`,
+      method: 'GET',
+      url: buildCandidateUrl(base, '', {
+        rest_route: `/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`,
+        consumer_key: consumerKey,
+        consumer_secret: consumerSecret,
+        label: projectName || cleanProjId,
+      }),
+    })
+  }
+
+  let lastError = null
+  let allRouteNotFound = true
+
+  for (const cand of candidates) {
+    try {
+      // 1. Try request with query params only first (avoids Apache/FastCGI basic auth interception)
+      const headers = {
+        'Accept': 'application/json',
+      }
+      if (cand.body) {
+        headers['Content-Type'] = 'application/json'
+      }
+
+      let resp = await fetch(cand.url, {
+        method: cand.method,
+        headers,
+        body: cand.body || undefined,
+      })
+
+      // 2. If 401 or 403, retry with Authorization: Basic header (for hosts that strictly require header auth)
+      if ((resp.status === 401 || resp.status === 403) && consumerKey && consumerSecret) {
+        const authHeaders = { ...headers }
+        try {
+          authHeaders['Authorization'] = 'Basic ' + btoa(`${consumerKey}:${consumerSecret}`)
+        } catch (bErr) {
+          console.warn('Base64 auth header error:', bErr)
+        }
+        const retryResp = await fetch(cand.url, {
+          method: cand.method,
+          headers: authHeaders,
+          body: cand.body || undefined,
+        }).catch(() => null)
+
+        if (retryResp && (retryResp.ok || retryResp.status !== 401)) {
+          resp = retryResp
+        }
+      }
+
+      if (resp.ok) {
+        const json = await resp.json().catch(() => null)
+        if (json && json.success === false) {
+          const msg = json.message || json.error || (json.data && (json.data.message || json.data.error))
+          throw new Error(msg || `License activation failed for "${cleanKey}".`)
+        }
+        responseData = json || { success: true }
+        allRouteNotFound = false
+        break
+      }
+
+      // If error response from WordPress
+      const errJson = await resp.json().catch(() => null)
+      const errCode = errJson?.code || errJson?.data?.status || errJson?.data?.code
+      const errorMsg = errJson?.message || errJson?.error || (errJson?.data && (errJson.data.message || errJson.data.error))
+
+      // If route or HTTP method did not match (WordPress core rest_no_route 404)
+      if (errCode === 'rest_no_route' || (errorMsg && errorMsg.toLowerCase().includes('no route was found'))) {
+        // Continue and try next candidate route/method
+        continue
+      }
+
+      // If route was recognized by WordPress, stop fallback and process exact error
+      allRouteNotFound = false
+
+      if (resp.status === 401 || resp.status === 403) {
+        throw new Error(
+          `WordPress API authorization failed (${resp.status}).\n\n` +
+          `To fix this in your WordPress store:\n` +
+          `1. Go to WordPress Admin > WooCommerce > Settings > Advanced > REST API.\n` +
+          `2. Check your API Key permissions — it MUST be set to "Read/Write" (keys with "Read" only will fail on activation).\n` +
+          `3. Copy your Consumer Key (ck_...) and Consumer Secret (cs_...) and enter them in SitePunch Settings > About tab under WordPress Store Connection.`
+        )
+      } else if (resp.status === 404 || (errorMsg && errorMsg.toLowerCase().includes('not exist'))) {
+        throw new Error(`The license key "${cleanKey}" does not exist in your WooCommerce store. Please verify the key.`)
+      } else if (
+        resp.status === 400 ||
+        resp.status === 422 ||
+        (errorMsg &&
+          (errorMsg.toLowerCase().includes('activated') ||
+            errorMsg.toLowerCase().includes('inactive') ||
+            errorMsg.toLowerCase().includes('limit') ||
+            errorMsg.toLowerCase().includes('max activations')))
+      ) {
+        throw new Error(errorMsg || `License key "${cleanKey}" is either already activated, reached maximum activations, or inactive.`)
+      } else if (errorMsg) {
+        throw new Error(errorMsg)
+      } else {
+        throw new Error(`WordPress license verification failed with HTTP status ${resp.status}.`)
+      }
+    } catch (candErr) {
+      if (
+        candErr.message &&
+        (candErr.message.includes('does not exist') ||
+          candErr.message.includes('already activated') ||
+          candErr.message.includes('authorization failed') ||
+          candErr.message.includes('inactive') ||
+          candErr.message.includes('limit') ||
+          candErr.message.includes('maximum activations') ||
+          candErr.message.includes('max activations') ||
+          candErr.message.includes('expired'))
+      ) {
+        throw candErr
+      }
+      lastError = candErr
+    }
+  }
+
+  // If no candidate succeeded
+  if (!responseData) {
+    if (allRouteNotFound) {
+      throw new Error(
+        `Unable to reach license activation endpoint at ${wpBase}.\n\n` +
+        `WordPress reported: "No route was found matching the URL and request method."\n\n` +
+        `Troubleshooting steps:\n` +
+        `1. Ensure 'License Manager for WooCommerce' (LMFWC) plugin is installed and activated on your WordPress site.\n` +
+        `2. Go to WordPress Admin > Settings > Permalinks, ensure "Post name" is selected, and click "Save Changes" to refresh REST API routes.\n` +
+        `3. In WooCommerce > Settings > License Manager, ensure the REST API is enabled.`
+      )
+    }
+    throw new Error(
+      `Unable to connect to WordPress license server at ${wpBase}.\n(${lastError?.message || 'Connection failed'})`
+    )
+  }
+
+  // Save the activated license record
+  const record = {
+    licenseKey: cleanKey,
+    projectUuid: cleanProjId,
+    reportUuid: cleanProjId,
+    projectName: projectName || 'Site Project',
+    status: 'ACTIVE',
+    provider: 'wordpress',
+    activatedAt: Date.now(),
+    wpData: responseData,
+  }
+
+  await saveLicenseRecord(record, cleanProjId, cleanKey)
   return record
 }
 

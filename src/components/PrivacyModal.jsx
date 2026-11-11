@@ -127,7 +127,7 @@ export default function PrivacyModal({ onClose }) {
               <h3 className="text-sm font-bold text-gray-900">Local-First Data Privacy Guarantee</h3>
             </div>
             <p className="text-gray-600 leading-relaxed">
-              SitePunch is engineered with a strict <strong>Local-First Architecture</strong>. Your drawing blueprints, punch list observations, inspection photos, and site notes are stored directly on your own device using browser IndexedDB storage.
+              Site Visit Assistant is engineered with a strict <strong>Local-First Architecture</strong>. Your drawing blueprints, punch list observations, inspection photos, and site notes are stored directly on your own device using browser IndexedDB storage.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
               <div className="bg-emerald-50/70 border border-emerald-150 p-3 rounded-xl flex items-start gap-2">

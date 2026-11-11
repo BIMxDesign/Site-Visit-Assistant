@@ -24,7 +24,7 @@ function ConstructionCloudIcon({ size = 18, className = '' }) {
 }
 
 const COLORS = [
-  '#ef4444', '#f97316', '#eab308', '#22c55e',
+  '#a40e26', '#ef4444', '#f97316', '#eab308', '#22c55e',
   '#3b82f6', '#8b5cf6', '#000000', '#ffffff'
 ]
 
@@ -39,14 +39,14 @@ export default function PhotoAnnotator({ imageDataUrl, onSave, onCancel }) {
   const overlayRef = useRef(null)
 
   const [tool,    setTool]    = useState('cloud')
-  const [color,   setColor]   = useState('#ef4444')
+  const [color,   setColor]   = useState('#a40e26')
   const [strokeW, setStrokeW] = useState(3)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
 
   // Use refs so event handlers always access the live values without stale closures
   const toolRef      = useRef('cloud')
-  const colorRef     = useRef('#ef4444')
+  const colorRef     = useRef('#a40e26')
   const strokeWRef   = useRef(3)
   const fabricRef    = useRef(null)
   const FabricLibRef = useRef(null)

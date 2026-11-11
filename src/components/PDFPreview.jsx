@@ -270,7 +270,7 @@ export default function PDFPreview() {
             // 3. Pin circle
             ctx.beginPath()
             ctx.arc(px, py, radius, 0, Math.PI * 2)
-            ctx.fillStyle = pinColor || '#dc2626'
+            ctx.fillStyle = pinColor || '#a40e26'
             ctx.fill()
             ctx.lineWidth = Math.max(2, Math.round(radius * 0.12))
             ctx.strokeStyle = '#ffffff'
@@ -979,7 +979,7 @@ export default function PDFPreview() {
         const circleCenterY = textY + pinRadius + 0.2
 
         // Outer pin circle with user's theme pin color
-        const { r: pr, g: pg, b: pb } = hexToRgb(pinColor || '#2563eb')
+        const { r: pr, g: pg, b: pb } = hexToRgb(pinColor || '#a40e26')
         doc.setFillColor(pr, pg, pb)
         doc.circle(circleCenterX, circleCenterY, pinRadius, 'F')
 
@@ -1366,7 +1366,7 @@ export default function PDFPreview() {
             </button>
             <div className="flex-1 min-w-0 flex flex-col justify-center">
               <h1 className="font-bold text-base leading-tight truncate text-white drop-shadow-xs">
-                Export Inspection Report
+                Generate Site Visit Report
               </h1>
               <p className="text-white/80 text-xs leading-tight mt-0.5 truncate font-medium">
                 {filterDrawing !== 'All'

@@ -1,38 +1,45 @@
 export const SHARED_COLOR_PRESETS = [
-  { id: 'blue',     name: 'Safety Blue',          hex: '#1d4ed8' },
-  { id: 'red',      name: 'Inspector Red',        hex: '#ef4444' },
-  { id: 'crimson',  name: 'Deep Crimson',         hex: '#dc2626' },
-  { id: 'orange',   name: 'Safety Orange',        hex: '#ea580c' },
-  { id: 'amber',    name: 'Warning Amber / Gold', hex: '#d97706' },
-  { id: 'emerald',  name: 'Jobsite Emerald',      hex: '#059669' },
-  { id: 'teal',     name: 'Steel Teal',           hex: '#0d9488' },
-  { id: 'sky',      name: 'Electric Sky',         hex: '#0284c7' },
-  { id: 'indigo',   name: 'Modern Indigo',        hex: '#4f46e5' },
-  { id: 'purple',   name: 'Royal Purple',         hex: '#7c3aed' },
-  { id: 'magenta',  name: 'Magenta Pink',         hex: '#db2777' },
-  { id: 'navy',     name: 'Construction Navy',    hex: '#0f172a' },
-  { id: 'slate',    name: 'Industrial Slate',     hex: '#334155' },
+  { id: 'brand-crimson', name: 'Brand Crimson',        hex: '#a40e26' },
+  { id: 'blue',          name: 'Safety Blue',          hex: '#1d4ed8' },
+  { id: 'red',           name: 'Inspector Red',        hex: '#ef4444' },
+  { id: 'crimson',       name: 'Deep Crimson',         hex: '#dc2626' },
+  { id: 'orange',        name: 'Safety Orange',        hex: '#ea580c' },
+  { id: 'amber',         name: 'Warning Amber / Gold', hex: '#d97706' },
+  { id: 'emerald',       name: 'Jobsite Emerald',      hex: '#059669' },
+  { id: 'teal',          name: 'Steel Teal',           hex: '#0d9488' },
+  { id: 'sky',           name: 'Electric Sky',         hex: '#0284c7' },
+  { id: 'indigo',        name: 'Modern Indigo',        hex: '#4f46e5' },
+  { id: 'purple',        name: 'Royal Purple',         hex: '#7c3aed' },
+  { id: 'magenta',       name: 'Magenta Pink',         hex: '#db2777' },
+  { id: 'navy',          name: 'Construction Navy',    hex: '#0f172a' },
+  { id: 'slate',         name: 'Industrial Slate',     hex: '#334155' },
 ]
 
 export const THEME_PRESETS = SHARED_COLOR_PRESETS
-export const DEFAULT_THEME_COLOR = '#1d4ed8'
+export const DEFAULT_THEME_COLOR = '#a40e26'
 
 export const PIN_COLOR_PRESETS = SHARED_COLOR_PRESETS
-export const DEFAULT_PIN_COLOR = '#ef4444'
+export const DEFAULT_PIN_COLOR = '#a40e26'
 
 export function applyPinColor(hexColor) {
   const color = (hexColor && hexColor.startsWith('#')) ? hexColor : DEFAULT_PIN_COLOR
+  const { r, g, b } = hexToRgb(color)
   if (typeof document !== 'undefined') {
-    document.documentElement.style.setProperty('--punch-pin-color', color)
+    const root = document.documentElement
+    root.style.setProperty('--punch-pin-color', color)
+    root.style.setProperty('--punch-pin-color-rgb', `${r}, ${g}, ${b}`)
+    try {
+      localStorage.setItem('sitepunch_pin_color', color)
+    } catch (_) {}
   }
 }
 
 export function hexToRgb(hex) {
-  if (!hex) return { r: 29, g: 78, b: 216 }
+  if (!hex) return { r: 164, g: 14, b: 38 }
   let c = hex.replace('#', '')
   if (c.length === 3) c = c.split('').map(x => x + x).join('')
   const num = parseInt(c, 16)
-  if (isNaN(num)) return { r: 29, g: 78, b: 216 }
+  if (isNaN(num)) return { r: 164, g: 14, b: 38 }
   return {
     r: (num >> 16) & 255,
     g: (num >> 8) & 255,

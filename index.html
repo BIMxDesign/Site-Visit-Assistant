@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#1e40af" />
+    <meta name="theme-color" content="#7e0b1d" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="SitePunch" />
-    <meta name="application-name" content="SitePunch" />
+    <meta name="apple-mobile-web-app-title" content="Site Visit Assistant" />
+    <meta name="application-name" content="Site Visit Assistant" />
+    <meta name="description" content="Simply on-site reports for Architects and Contractors" />
     <meta name="format-detection" content="telephone=no" />
     <meta http-equiv="X-Content-Type-Options" content="nosniff" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
@@ -17,11 +18,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Open+Sans:wght@400;600;700&family=Outfit:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
-    <title>SitePunch — Site Punch List App</title>
+    <title>Site Visit Assistant — Simply on-site reports for Architects and Contractors</title>
     <script>
       (function() {
         try {
-          var savedTheme = localStorage.getItem('sitepunch_theme_color');
+          var savedTheme = localStorage.getItem('sitepunch_theme_color') || '#a40e26';
+          if (savedTheme === '#1d4ed8') savedTheme = '#a40e26';
+          var savedPin = localStorage.getItem('sitepunch_pin_color') || '#a40e26';
+          if (savedPin === '#ef4444') savedPin = '#a40e26';
           if (savedTheme && savedTheme.startsWith('#')) {
             var c = savedTheme.replace('#', '');
             if (c.length === 3) c = c.split('').map(function(x){ return x+x; }).join('');
@@ -41,9 +45,19 @@
               root.style.setProperty('--brand-header', brand800);
               root.style.setProperty('--brand-button', brand700);
               root.style.setProperty('--brand-button-hover', brand800);
+              root.style.setProperty('--punch-pin-color', savedPin);
+              if (savedPin && savedPin.startsWith('#')) {
+                var pc = savedPin.replace('#', '');
+                if (pc.length === 3) pc = pc.split('').map(function(x){ return x+x; }).join('');
+                var pnum = parseInt(pc, 16);
+                if (!isNaN(pnum)) {
+                  var pr = (pnum >> 16) & 255, pg = (pnum >> 8) & 255, pb = pnum & 255;
+                  root.style.setProperty('--punch-pin-color-rgb', pr + ', ' + pg + ', ' + pb);
+                }
+              }
               var styleEl = document.createElement('style');
               styleEl.id = 'sitepunch-theme-override';
-              styleEl.textContent = ':root{--brand-color:' + savedTheme + '!important;--brand-header:' + brand800 + '!important;--brand-button:' + brand700 + '!important;--brand-button-hover:' + brand800 + '!important;}' +
+              styleEl.textContent = ':root{--brand-color:' + savedTheme + '!important;--brand-header:' + brand800 + '!important;--brand-button:' + brand700 + '!important;--brand-button-hover:' + brand800 + '!important;--punch-pin-color:' + savedPin + '!important;}' +
                 'header,.sitepunch-header,.bg-brand-800,header.bg-brand-800{background-color:' + brand800 + '!important;}' +
                 '.sitepunch-btn-primary,.sitepunch-fab,.bg-brand-700,button.bg-brand-700{background-color:' + brand700 + '!important;}' +
                 '.sitepunch-btn-primary:hover,.sitepunch-fab:hover,.hover\\:bg-brand-800:hover,button.hover\\:bg-brand-800:hover{background-color:' + brand800 + '!important;}';

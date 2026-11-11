@@ -37,11 +37,21 @@ export const useAppStore = create((set, get) => ({
   // Company / branding settings
   companyName: '',
   companyLogo: null,  // base64 data URL
-  themeColor:  DEFAULT_THEME_COLOR,
+  themeColor: (() => {
+    try {
+      const saved = localStorage.getItem('sitepunch_theme_color')
+      if (saved && saved !== '#1d4ed8') return saved
+      return DEFAULT_THEME_COLOR
+    } catch {
+      return DEFAULT_THEME_COLOR
+    }
+  })(),
   appFont:     DEFAULT_FONT_ID,
   pinColor: (() => {
     try {
-      return localStorage.getItem('sitepunch_pin_color') || DEFAULT_PIN_COLOR
+      const saved = localStorage.getItem('sitepunch_pin_color')
+      if (saved && saved !== '#ef4444') return saved
+      return DEFAULT_PIN_COLOR
     } catch {
       return DEFAULT_PIN_COLOR
     }
@@ -61,8 +71,22 @@ export const useAppStore = create((set, get) => ({
     }
   })(),
   exportedPdfCount: getExportedPdfCount(),
+  showChecklist: (() => {
+    try {
+      const saved = localStorage.getItem('sitepunch_show_checklist')
+      return saved !== null ? saved === 'true' : true
+    } catch {
+      return true
+    }
+  })(),
 
   // ── Setters ───────────────────────────────────────────────
+  setShowChecklist:          show => {
+    set({ showChecklist: show })
+    try {
+      localStorage.setItem('sitepunch_show_checklist', String(show))
+    } catch {}
+  },
   setActiveTab:              tab  => set({ activeTab: tab }),
   setCurrentProject:         uuid => set({ currentProjectUuid: uuid }),
   setCurrentPhase:           uuid => set({ currentPhaseUuid: uuid }),
@@ -155,14 +179,29 @@ export const useAppStore = create((set, get) => ({
     currentFloorPlanUuid: null,
     activeTab: 'project'
   }),
-  navigateToFloorPlan: (projectUuid, fpUuid, phaseUuid = undefined) => set(state => ({
-    currentProjectUuid: projectUuid,
-    currentFloorPlanUuid: fpUuid,
-    currentPhaseUuid: phaseUuid !== undefined ? phaseUuid : state.currentPhaseUuid,
-    activeTab: 'floorplan'
-  })),
+  navigateToFloorPlan: (projectUuid, fpUuid, phaseUuid = undefined) => set(state => {
+    // If called with only 1 argument (fpUuid), infer projectUuid from current state
+    if (fpUuid === undefined && typeof projectUuid === 'string') {
+      return {
+        currentFloorPlanUuid: projectUuid,
+        activeTab: 'floorplan'
+      }
+    }
+    return {
+      currentProjectUuid: projectUuid || state.currentProjectUuid,
+      currentFloorPlanUuid: fpUuid,
+      currentPhaseUuid: phaseUuid !== undefined ? phaseUuid : state.currentPhaseUuid,
+      activeTab: 'floorplan'
+    }
+  }),
   navigateToDashboard: () => set({
     activeTab: 'dashboard',
+    currentProjectUuid: null,
+    currentPhaseUuid: null,
+    currentFloorPlanUuid: null
+  }),
+  navigateToProjects: () => set({
+    activeTab: 'projects',
     currentProjectUuid: null,
     currentPhaseUuid: null,
     currentFloorPlanUuid: null

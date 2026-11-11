@@ -7,6 +7,14 @@ export default defineConfig({
   server: {
     watch: {
       ignored: ['**/*.zip', '**/wordpress-plugin/**', '**/.git/**']
+    },
+    proxy: {
+      '/api-wp': {
+        target: 'https://www.bimxdesign.com',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api-wp/, '')
+      }
     }
   },
   plugins: [
@@ -15,9 +23,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icons/*.png'],
       manifest: {
-        name: 'SitePunch - Punch List App',
-        short_name: 'SitePunch',
-        description: 'Site Punch List & Observation Report App',
+        name: 'Site Visit Assistant',
+        short_name: 'Site Visit Assistant',
+        description: 'Simply on-site reports for Architects and Contractors',
         theme_color: '#1e40af',
         background_color: '#ffffff',
         display: 'standalone',

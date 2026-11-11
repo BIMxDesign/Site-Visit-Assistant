@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   ArrowLeft, ZoomIn, ZoomOut, Maximize2, Filter,
   Trash2, Plus, ChevronDown, ChevronUp, GripVertical, Check, FileImage, Edit2, Camera, ClipboardList, FileText,
-  Layers, ListOrdered, AlertCircle, Calendar, User
+  Layers, ListOrdered, AlertCircle, Calendar, User, Home
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -17,9 +17,11 @@ import {
   resequenceReportPins,
   getPrimaryPhotos,
   getPhases,
+  getProject,
 } from '../db/database'
 import { v4 as uuidv4 } from 'uuid'
 import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
+import Breadcrumbs from '../components/Breadcrumbs'
 import { truncateObservationTitle, formatDatePattern } from '../utils/formatters'
 
 const PIN_SIZE = 28
@@ -43,6 +45,8 @@ export default function FloorPlanView() {
     currentProjectUuid,
     currentPhaseUuid,
     currentFloorPlanUuid,
+    navigateToDashboard,
+    navigateToProjects,
     navigateToProject,
     navigateToFloorPlan,
     openPunchForm,
@@ -54,6 +58,7 @@ export default function FloorPlanView() {
 
   const containerRef = useRef(null)
 
+  const [project,        setProject]        = useState(null)
   const [floorPlan,      setFloorPlan]      = useState(null)
   const [allFloorPlans,  setAllFloorPlans]  = useState([])
   const [phases,         setPhases]         = useState([])
@@ -103,10 +108,11 @@ export default function FloorPlanView() {
   // ── Data loading ───────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     if (!currentFloorPlanUuid) return
-    const [fp, fps, phaseList] = await Promise.all([
+    const [fp, fps, phaseList, proj] = await Promise.all([
       getFloorPlan(currentFloorPlanUuid),
       getFloorPlans(currentProjectUuid),
       getPhases(currentProjectUuid),
+      getProject(currentProjectUuid),
     ])
 
     // Always maintain continuous sequence across drawings in drawing order
@@ -120,6 +126,7 @@ export default function FloorPlanView() {
     setFloorPlan(fp)
     setAllFloorPlans(fps)
     setPhases(phaseList)
+    setProject(proj)
     setPunchItems(items)
 
     if (items.length > 0) {
@@ -735,6 +742,8 @@ export default function FloorPlanView() {
     </div>
   )
 
+  const currentPhase = phases.find(p => p.uuid === floorPlan?.phaseUuid) || (phases.length > 0 ? phases[0] : null)
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#111827' }}>
 
@@ -751,7 +760,7 @@ export default function FloorPlanView() {
             navigateToProject(currentProjectUuid, reportUuid)
           }}
           className="liquid-glass-btn p-2 rounded-xl text-white flex items-center justify-center cursor-pointer transition-all"
-          title="Back to report"
+          title="Back to site visit"
         >
           <ArrowLeft size={20} />
         </button>
@@ -822,7 +831,7 @@ export default function FloorPlanView() {
                   ))}
                   {currentPhaseFps.length === 0 && (
                     <div style={{ padding: '12px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
-                      No other key plans in this report
+                      No other key plans in this site visit
                     </div>
                   )}
                 </div>
@@ -861,6 +870,29 @@ export default function FloorPlanView() {
           <span className="hidden sm:inline">Export</span>
         </button>
       </header>
+
+      {/* ── Breadcrumb Navigation Path ── */}
+      <div className="px-3 py-1.5 bg-slate-900/90 border-b border-slate-800/80 flex-shrink-0 z-20">
+        <Breadcrumbs
+          dark
+          items={[
+            { label: 'Dashboard', icon: <Home size={13} />, onClick: navigateToDashboard },
+            { label: 'Projects', onClick: navigateToProjects },
+            {
+              label: project?.name || 'Project',
+              onClick: () => navigateToProject(currentProjectUuid, null)
+            },
+            {
+              label: currentPhase?.name || 'Site Visit',
+              onClick: () => navigateToProject(currentProjectUuid, currentPhase?.uuid || floorPlan?.phaseUuid)
+            },
+            {
+              label: floorPlan?.name || 'Key Plan',
+              active: true
+            }
+          ]}
+        />
+      </div>
 
       {/* ── Main View: Interactive Drawing Canvas OR Structured Observations List ── */}
       {viewMode === 'drawing' ? (
@@ -949,7 +981,7 @@ export default function FloorPlanView() {
                           width: 50,
                           height: 50,
                           borderRadius: 10,
-                          border: isDragging ? '3px solid #3b82f6' : `2.5px solid ${pinColor || '#ef4444'}`,
+                          border: isDragging ? '3px solid #3b82f6' : `2.5px solid ${pinColor || '#a40e26'}`,
                           background: '#1e293b',
                           overflow: 'hidden',
                           position: 'relative',
@@ -971,7 +1003,7 @@ export default function FloorPlanView() {
                             position: 'absolute',
                             bottom: 2,
                             right: 2,
-                            background: pinColor || '#ef4444',
+                            background: pinColor || '#a40e26',
                             color: 'white',
                             fontWeight: 800,
                             fontSize: item.itemNumber > 99 ? 8 : 10,
@@ -990,7 +1022,7 @@ export default function FloorPlanView() {
                           height: 0,
                           borderLeft: '6px solid transparent',
                           borderRight: '6px solid transparent',
-                          borderTop: isDragging ? '7px solid #3b82f6' : `7px solid ${pinColor || '#ef4444'}`,
+                          borderTop: isDragging ? '7px solid #3b82f6' : `7px solid ${pinColor || '#a40e26'}`,
                           marginTop: -1,
                         }} />
                       </div>
@@ -1016,7 +1048,7 @@ export default function FloorPlanView() {
                       width:        PIN_SIZE,
                       height:       PIN_SIZE,
                       borderRadius: '50%',
-                      background:   pinColor || '#ef4444',
+                      background:   pinColor || '#a40e26',
                       border:       isDragging ? '3px solid #3b82f6' : '2.5px solid white',
                       display:      'flex',
                       alignItems:   'center',
@@ -1150,7 +1182,7 @@ export default function FloorPlanView() {
                 <span className="truncate">{floorPlan?.name || 'Key Plan'} Observations</span>
                 <span
                   className="text-xs px-2 py-0.5 rounded-full font-bold text-white shadow-xs flex-shrink-0"
-                  style={{ background: pinColor || '#ef4444' }}
+                  style={{ background: pinColor || '#a40e26' }}
                 >
                   {filteredItems.length} {filteredItems.length === 1 ? 'Item' : 'Items'}
                 </span>
@@ -1315,7 +1347,7 @@ export default function FloorPlanView() {
                           ? 'ring-2 ring-brand-400 scale-[1.01]'
                           : 'active:scale-[0.99] hover:shadow-md'
                     }`}
-                    style={{ borderLeft: '4px solid var(--brand-button, #1d4ed8)' }}
+                    style={{ borderLeft: '4px solid var(--punch-pin-color, #a40e26)' }}
                   >
                     {/* Drag Grip Handle for Mouse and Touch / Finger */}
                     <div
@@ -1340,7 +1372,7 @@ export default function FloorPlanView() {
                     {/* Pin Number Badge */}
                     <div
                       className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-sm text-white"
-                      style={{ background: pinColor || '#ef4444' }}
+                      style={{ background: pinColor || '#a40e26' }}
                     >
                       #{item.itemNumber}
                     </div>

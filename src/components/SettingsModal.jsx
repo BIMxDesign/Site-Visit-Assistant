@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react'
 import {
   ArrowLeft, Upload, Trash2, Check, Image as ImageIcon,
   AlertTriangle, Edit2, Info, Key, ShieldCheck, CheckCircle2,
-  Smartphone, Palette, Type, Download, Shield, Plus, Lock, MapPin, Building2, Globe, ExternalLink,
-  User, LogOut, Calendar, FolderOpen, ClipboardList, AlertCircle, FileText,
-  GitMerge, ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy
+  Smartphone, Palette, Type, Download, Shield, Plus, Lock, MapPin, Building2,
+  User, LogOut, Calendar, Folder, FolderOpen, ClipboardList, AlertCircle, FileText,
+  GitMerge, ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy, Sparkles, X
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -16,10 +16,7 @@ import EditProjectModal from './EditProjectModal'
 import LicenseActivationModal from './LicenseActivationModal'
 import {
   getLicensedProjectUuids,
-  getCachedLicenses,
-  getWordPressUrl,
-  setWordPressUrl,
-  DEFAULT_WP_URL
+  getCachedLicenses
 } from '../services/licenseService'
 import { THEME_PRESETS, applyThemeColor, DEFAULT_THEME_COLOR, PIN_COLOR_PRESETS, applyPinColor, DEFAULT_PIN_COLOR } from '../utils/theme'
 import { FONT_OPTIONS, applyAppFont, DEFAULT_FONT_ID } from '../utils/font'
@@ -27,6 +24,7 @@ import { FONT_OPTIONS, applyAppFont, DEFAULT_FONT_ID } from '../utils/font'
 export default function SettingsModal() {
   const {
     closeSettings,
+    openNewProject,
     companyName,
     companyLogo,
     themeColor,
@@ -46,7 +44,9 @@ export default function SettingsModal() {
     currentUser,
     setCurrentUser,
     openAuthModal,
-    logout
+    logout,
+    showChecklist,
+    setShowChecklist,
   } = useAppStore()
 
   const [name,          setName]          = useState(companyName)
@@ -80,20 +80,9 @@ export default function SettingsModal() {
   const [licensedProjectSet, setLicensedProjectSet] = useState(() => getLicensedProjectUuids())
   const [activeLicenses,   setActiveLicenses]   = useState(() => getCachedLicenses())
 
-  // WordPress Store URL configuration
-  const [wpUrl, setWpUrl] = useState(getWordPressUrl())
-  const [editingWpUrl, setEditingWpUrl] = useState(false)
-  const [wpUrlInput, setWpUrlInput] = useState(getWordPressUrl())
-
   function reloadLicenses() {
     setLicensedProjectSet(getLicensedProjectUuids())
     setActiveLicenses(getCachedLicenses())
-  }
-
-  function handleSaveWpUrl() {
-    setWordPressUrl(wpUrlInput)
-    setWpUrl(getWordPressUrl())
-    setEditingWpUrl(false)
   }
 
   // User profile states - separate First Name and Last Name
@@ -882,7 +871,7 @@ export default function SettingsModal() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
                   <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                     <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                      <FolderOpen size={14} className="text-brand-600" />
+                      <Folder size={14} className="text-amber-600 fill-amber-400/25 stroke-[2.2]" />
                       <span className="truncate">Projects</span>
                     </div>
                     <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{projects.length}</p>
@@ -890,7 +879,7 @@ export default function SettingsModal() {
 
                   <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                     <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                      <ClipboardList size={14} className="text-blue-600" />
+                      <ClipboardList size={14} className="text-purple-700 stroke-[2.2]" />
                       <span className="truncate">Reports</span>
                     </div>
                     <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
@@ -900,7 +889,7 @@ export default function SettingsModal() {
 
                   <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                     <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                      <AlertCircle size={14} className="text-red-500" />
+                      <AlertCircle size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
                       <span className="truncate">Observations</span>
                     </div>
                     <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
@@ -910,7 +899,7 @@ export default function SettingsModal() {
 
                   <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                     <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                      <FileText size={14} className="text-purple-600" />
+                      <FileText size={14} className="text-purple-600 stroke-[2.2]" />
                       <span className="truncate">PDF Exports</span>
                     </div>
                     <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
@@ -930,10 +919,13 @@ export default function SettingsModal() {
                 </p>
               </div>
 
-              {/* Action Buttons: Import & Merge Project */}
+              {/* Action Buttons: Import & New Project */}
               <div className="flex items-center gap-2 flex-wrap">
                 {/* Import Project Button */}
-                <label className="cursor-pointer px-3.5 py-2 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors">
+                <label
+                  className="cursor-pointer px-3.5 py-2 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+                  style={{ background: 'var(--brand-button, #a40e26)' }}
+                >
                   {importing ? <Spinner /> : <Download size={14} />}
                   <span>Import Project</span>
                   <input
@@ -945,18 +937,20 @@ export default function SettingsModal() {
                   />
                 </label>
 
-                {/* Merge Project Option */}
-                <label className="cursor-pointer px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors">
-                  {merging ? <Spinner /> : <GitMerge size={14} />}
-                  <span>Merge Project</span>
-                  <input
-                    type="file"
-                    accept=".json"
-                    className="hidden"
-                    disabled={importing || merging}
-                    onChange={handleInitiateMerge}
-                  />
-                </label>
+                {/* New Project Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeSettings()
+                    openNewProject()
+                  }}
+                  className="cursor-pointer px-3.5 py-2 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all active:scale-95"
+                  style={{ background: 'var(--brand-button, #a40e26)' }}
+                  title="Create a new project"
+                >
+                  <Plus size={14} />
+                  <span>New Project</span>
+                </button>
               </div>
             </div>
 
@@ -975,19 +969,39 @@ export default function SettingsModal() {
                   const isDeleting = deletingId === p.uuid
                   const isExporting = exportingId === p.uuid
                   const isProjectUnlocked = p.isLicensed || Boolean(p.licenseKey) || licensedProjectSet.has(p.uuid)
+                  const isClosed = p.status === 'Closed'
 
                   return (
                     <div
                       key={p.uuid}
-                      className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
-                        isCurrent
-                          ? 'bg-blue-50/60 border-blue-200 shadow-sm'
-                          : 'bg-white border-gray-200 hover:border-gray-300'
+                      className={`p-3.5 sm:p-4.5 rounded-2xl border border-l-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all duration-200 overflow-hidden ${
+                        isClosed
+                          ? 'bg-white/80 border-gray-200/90 opacity-80 border-l-gray-400 shadow-xs'
+                          : 'hover:-translate-y-0.5'
                       }`}
+                      style={
+                        !isClosed
+                          ? {
+                              borderLeftColor: '#f59e0b',
+                              borderColor: 'rgba(251, 191, 36, 0.45)',
+                              background: 'linear-gradient(135deg, rgba(255, 251, 235, 0.9) 0%, #ffffff 45%, rgba(254, 243, 199, 0.75) 100%)',
+                              boxShadow: '0 4px 18px -2px rgba(245, 158, 11, 0.14), 0 2px 6px rgba(0, 0, 0, 0.04)',
+                            }
+                          : {}
+                      }
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="text-sm font-bold text-gray-900 truncate">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <div
+                            className={`w-7 h-7 rounded-lg border flex items-center justify-center flex-shrink-0 shadow-2xs ${
+                              isClosed
+                                ? 'bg-gray-100 border-gray-200 text-gray-500'
+                                : 'bg-amber-50 border-amber-200/70 text-amber-600'
+                            }`}
+                          >
+                            <Folder size={15} className={isClosed ? 'stroke-[2.2]' : 'fill-amber-400/25 stroke-[2.2]'} />
+                          </div>
+                          <p className={`text-sm font-bold truncate ${isClosed ? 'text-gray-700' : 'text-gray-900'}`}>
                             {p.name}
                           </p>
                           {isCurrent && (
@@ -996,7 +1010,7 @@ export default function SettingsModal() {
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 text-xs text-gray-500 mt-1 flex-wrap">
+                        <div className="flex items-center gap-2 text-xs text-gray-500 mt-1.5 ml-9.5 flex-wrap">
                           {p.number && (
                             <>
                               <span className="font-mono">#{p.number}</span>
@@ -1009,12 +1023,30 @@ export default function SettingsModal() {
                               : '0 reports'}
                           </span>
                           <span>•</span>
-                          <span className="capitalize">{p.status || 'Active'}</span>
+                          <span
+                            className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border shadow-2xs transition-colors"
+                            style={
+                              isClosed
+                                ? {
+                                    background: '#f1f5f9',
+                                    color: '#475569',
+                                    borderColor: '#cbd5e1',
+                                  }
+                                : {
+                                    background: '#fef3c7',
+                                    color: '#92400e',
+                                    borderColor: '#fde68a',
+                                  }
+                            }
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${isClosed ? 'bg-gray-400' : 'bg-amber-500'}`} />
+                            {p.status || 'Active'}
+                          </span>
                         </div>
                       </div>
 
                       {/* Actions Container: cleanly separated on mobile, aligned right */}
-                      <div className="flex items-center justify-end gap-2 pt-2.5 sm:pt-0 border-t border-gray-100 sm:border-0 flex-wrap sm:flex-nowrap">
+                      <div className="flex items-center justify-end gap-2 pt-2.5 sm:pt-0 border-t border-amber-200/40 sm:border-0 flex-wrap sm:flex-nowrap">
                         {/* License Status / Activate Key Button (aligned right on mobile) */}
                         <div className="flex-shrink-0 ml-auto sm:ml-0">
                           {isProjectUnlocked ? (
@@ -1234,65 +1266,6 @@ export default function SettingsModal() {
                 </div>
               </div>
 
-              {/* WordPress Store Connection */}
-              <div className="p-4 bg-blue-50/70 rounded-xl border border-blue-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Globe size={15} className="text-brand-600 flex-shrink-0" />
-                    <h5 className="font-bold text-gray-900 text-xs">WordPress Store Connection</h5>
-                  </div>
-                  <p className="text-[11px] text-gray-600 mt-0.5 font-mono truncate">
-                    {wpUrl}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setEditingWpUrl(!editingWpUrl)}
-                    className="px-3 py-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-xs font-semibold shadow-2xs"
-                  >
-                    {editingWpUrl ? 'Cancel' : 'Change Domain'}
-                  </button>
-                  <a
-                    href={wpUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3.5 py-1.5 bg-brand-700 hover:bg-brand-800 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm"
-                  >
-                    <span>Visit Store</span>
-                    <ExternalLink size={12} />
-                  </a>
-                </div>
-              </div>
-
-              {/* Edit Store URL Field */}
-              {editingWpUrl && (
-                <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl space-y-2 animate-fade-in text-xs">
-                  <label className="font-semibold text-gray-700 block">
-                    WordPress Marketing Website Address
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="url"
-                      className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 bg-white"
-                      value={wpUrlInput}
-                      onChange={e => setWpUrlInput(e.target.value)}
-                      placeholder="https://www.bimxdesign.com"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleSaveWpUrl}
-                      className="px-4 py-2 bg-brand-700 hover:bg-brand-800 text-white rounded-lg text-xs font-bold"
-                    >
-                      Save Store Address
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-gray-400">
-                    License keys are verified against the License Manager for WooCommerce REST endpoint at this domain.
-                  </p>
-                </div>
-              )}
-
               {/* Active Licenses List */}
               <div className="space-y-2 pt-2 border-t border-gray-150">
                 <div className="flex items-center justify-between">
@@ -1330,16 +1303,50 @@ export default function SettingsModal() {
               </div>
             </div>
 
+            {/* Getting Started Checklist Card */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="p-2 rounded-xl text-white shadow-2xs"
+                    style={{ background: 'var(--brand-button, #a40e26)' }}
+                  >
+                    <Sparkles size={18} />
+                  </div>
+                  <h4 className="text-sm font-bold text-gray-900">Getting Started Checklist</h4>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowChecklist(!showChecklist)}
+                  className="sitepunch-btn-primary px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs flex items-center justify-center gap-1.5 cursor-pointer flex-shrink-0 transition-all hover:opacity-95"
+                  style={{ background: 'var(--brand-button, #a40e26)' }}
+                >
+                  {showChecklist ? (
+                    <>
+                      <X size={14} />
+                      <span>Hide Checklist</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={14} />
+                      <span>Reveal Checklist</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
             {/* About Card */}
             <div className="bg-brand-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden">
               <div className="flex items-center justify-between mb-3">
-                <h4 className="text-base font-bold tracking-tight">SitePunch</h4>
+                <h4 className="text-base font-bold tracking-tight">Site Visit Assistant</h4>
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/10 text-brand-200">
                   v2.6.0
                 </span>
               </div>
               <p className="text-xs text-brand-100 leading-relaxed max-w-xl">
-                Modern offline-first Progressive Web Application designed for architects, general contractors, and construction inspectors to pin observations, mark up photos with drawing tools, and generate branded PDF reports directly on site.
+                Simply on-site reports for Architects and Contractors. Modern offline-first Progressive Web Application designed to pin observations, mark up photos with drawing tools, and generate branded PDF reports directly on site.
               </p>
               <div className="mt-4 pt-4 border-t border-white/10 grid grid-cols-2 gap-3 text-xs text-brand-200">
                 <div className="flex items-center gap-2">
@@ -1375,7 +1382,7 @@ export default function SettingsModal() {
             >
               {saved  ? <><Check size={18}/> Saved Successfully!</> :
                saving ? <Spinner /> :
-               'Save Organization Settings'}
+               'Save Settings'}
             </button>
           </div>
         </div>

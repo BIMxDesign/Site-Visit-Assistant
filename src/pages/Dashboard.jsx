@@ -1,17 +1,35 @@
 import React, { useState, useEffect } from 'react'
 import {
-  Plus, FolderOpen, Settings, Download, Trash2, Edit2,
+  Plus, FolderOpen, Folder, Settings, Download, Trash2, Edit2,
   ChevronRight, AlertCircle, Filter, Check,
   FileImage, ClipboardList, Clock, CheckCircle, Shield, MapPin,
-  Lock, Unlock, Camera, FileText
+  Lock, Unlock, Camera, FileText, Calendar
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import { getAllProjects, deleteProject, db } from '../db/database'
 import EditProjectModal from '../components/EditProjectModal'
 import LicenseActivationModal from '../components/LicenseActivationModal'
+import WelcomeChecklist from '../components/WelcomeChecklist'
 import { getLicensedProjectUuids } from '../services/licenseService'
-import { formatFirstAndLastInitial } from '../utils/formatters'
+import { formatFirstAndLastInitial, formatDatePattern } from '../utils/formatters'
 import { getExportedPdfCount } from '../utils/exportCounter'
+
+function formatRelativeOrDate(timestamp) {
+  if (!timestamp) return ''
+  const diff = Date.now() - timestamp
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'Just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  try {
+    return formatDatePattern(new Date(timestamp).toISOString().slice(0, 10))
+  } catch {
+    return ''
+  }
+}
 
 const STATUS_STYLES = {
   Active:    'bg-green-100 text-green-800 border border-green-200',
@@ -26,14 +44,19 @@ export default function Dashboard() {
   const {
     openNewProject,
     openSettings,
+    navigateToProjects,
     navigateToProject,
     openPDFPreview,
     setCurrentProject,
     companyLogo,
     companyName,
     currentUser,
+    showChecklist,
+    setShowChecklist,
   } = useAppStore()
   const [projects, setProjects] = useState([])
+  const [recentProjects, setRecentProjects] = useState([])
+  const [recentReports, setRecentReports] = useState([])
   const [loading, setLoading]   = useState(true)
   const [deleting, setDeleting] = useState(null)
   const [editingProject, setEditingProject] = useState(null)
@@ -85,6 +108,34 @@ export default function Dashboard() {
       })
 
       setProjects(augmented)
+
+      // Compute recent projects (top 4 by most recent activity)
+      const sortedProjs = [...augmented].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
+      setRecentProjects(sortedProjs.slice(0, 4))
+
+      // Compute recent reports across projects (top 4 by activity / visitDate)
+      const projectMap = new Map(augmented.map(proj => [proj.uuid, proj]))
+      const augmentedReports = allPhases
+        .map(ph => {
+          const parentProj = projectMap.get(ph.projectUuid)
+          if (!parentProj) return null
+          const phaseFps = allFps.filter(fp => fp.phaseUuid === ph.uuid || (!fp.phaseUuid && ph.isDefault))
+          const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
+          const phasePins = allItems.filter(i => (i.phaseUuid === ph.uuid) || phaseFpUuids.has(i.floorPlanUuid))
+          const time = ph.updatedAt || ph.createdAt || (ph.visitDate ? new Date(ph.visitDate).getTime() : 0) || (parentProj.updatedAt || parentProj.createdAt || 0)
+          return {
+            ...ph,
+            projectName: parentProj.name,
+            projectNumber: parentProj.projectNumber,
+            drawingCount: phaseFps.length,
+            pinCount: phasePins.length,
+            sortTime: time,
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.sortTime - a.sortTime)
+
+      setRecentReports(augmentedReports.slice(0, 4))
 
       const [totalPhotos, totalExportedPdfs] = await Promise.all([
         db.photos.count().catch(() => 0),
@@ -170,9 +221,9 @@ export default function Dashboard() {
             )}
             <div className="flex flex-col justify-center min-w-0">
               <h1 className="text-xl font-bold tracking-tight leading-tight truncate">
-                {companyName?.trim() || 'SitePunch'}
+                {companyName?.trim() || 'Site Visit Assistant'}
               </h1>
-              <p className="text-brand-200 text-xs truncate leading-tight mt-0.5">Field Observation Report Tool</p>
+              <p className="text-brand-200 text-xs truncate leading-tight mt-0.5">Site Visit Report Tool</p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -213,7 +264,7 @@ export default function Dashboard() {
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-2.5">
                 <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                   <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <FolderOpen size={14} className="text-brand-600" />
+                    <Folder size={14} className="text-amber-600 fill-amber-400/25 stroke-[2.2]" />
                     <span className="truncate">Projects</span>
                   </div>
                   <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{stats.totalProjects}</p>
@@ -221,15 +272,15 @@ export default function Dashboard() {
 
                 <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                   <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <ClipboardList size={14} className="text-blue-600" />
-                    <span className="truncate">Reports</span>
+                    <ClipboardList size={14} className="text-purple-700 stroke-[2.2]" />
+                    <span className="truncate">Site Visits</span>
                   </div>
                   <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{stats.totalReports}</p>
                 </div>
 
                 <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                   <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <FileImage size={14} className="text-indigo-600" />
+                    <FileImage size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
                     <span className="truncate">Key Plans</span>
                   </div>
                   <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{stats.totalDrawings}</p>
@@ -237,7 +288,7 @@ export default function Dashboard() {
 
                 <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                   <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <AlertCircle size={14} className="text-red-500" />
+                    <AlertCircle size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
                     <span className="truncate">Punch Pins</span>
                   </div>
                   <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
@@ -267,105 +318,143 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Projects List */}
+            {/* Welcome (Getting Started Checklist) Card */}
+            {showChecklist && (
+              <WelcomeChecklist
+                stats={stats}
+                projects={projects}
+                onClose={() => setShowChecklist(false)}
+              />
+            )}
+
+            {/* Quick Access: Recent Projects & Recent Site Visits Side-by-Side on Large Screens */}
             {projects.length === 0 ? (
               <EmptyState onNew={openNewProject} />
             ) : (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between mb-3 gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-xl bg-brand-50 border border-brand-200/80 flex items-center justify-center text-brand-700 shadow-2xs flex-shrink-0">
-                      <FolderOpen size={17} className="stroke-[2.2]" />
-                    </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 items-start">
+                {/* Recent Projects Card */}
+                <div className="liquid-glass-surface rounded-2xl p-4 sm:p-5 border border-white/60 shadow-xs flex flex-col min-w-0">
+                  <div className="flex items-center justify-between pb-3 mb-3 border-b border-gray-200/60">
                     <div className="flex items-center gap-2 min-w-0">
-                      <h2 className="text-base sm:text-lg font-bold text-gray-900 tracking-tight truncate">
-                        Projects
+                      <div className="w-7 h-7 rounded-lg bg-amber-50 border border-amber-200/70 flex items-center justify-center text-amber-600 flex-shrink-0 shadow-2xs">
+                        <Folder size={15} className="fill-amber-400/25 stroke-[2.2]" />
+                      </div>
+                      <h2 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
+                        Recent Projects
                       </h2>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-brand-50 text-brand-700 border border-brand-200/80">
-                        {filteredProjects.length}
-                      </span>
                     </div>
-                    {filter !== 'All' && (
-                      <button
-                        onClick={() => setFilter('All')}
-                        className="text-xs text-brand-700 hover:underline font-semibold flex-shrink-0 ml-1"
-                      >
-                        Clear
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={navigateToProjects}
+                      className="sitepunch-btn-primary inline-flex items-center gap-1.5 text-xs font-bold text-white px-3 sm:px-3.5 py-1.5 rounded-xl shadow-xs cursor-pointer transition-all hover:opacity-95 active:scale-95 flex-shrink-0"
+                      style={{ background: 'var(--brand-button, #a40e26)' }}
+                      title="See all projects in the application page"
+                    >
+                      <span>See All Projects</span>
+                      <ChevronRight size={13} className="stroke-[2.5]" />
+                    </button>
                   </div>
 
-                  {/* Filter button moved next to Projects */}
-                  <div className="relative flex-shrink-0" id="project-filter-container">
-                    <button
-                      onClick={() => setShowFilter(f => !f)}
-                      className={`liquid-pill px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer ${
-                        filter !== 'All'
-                          ? 'text-brand-700 font-bold'
-                          : 'text-gray-700'
-                      }`}
-                      title="Filter projects by status"
-                    >
-                      <Filter size={14} className={filter !== 'All' ? 'text-brand-600' : 'text-gray-500'} />
-                      <span>{filter === 'All' ? 'Filter' : filter}</span>
-                    </button>
-                    {showFilter && (
-                      <div
-                        className="liquid-glass-surface rounded-2xl p-1.5 shadow-2xl z-30"
-                        style={{
-                          position: 'absolute', right: 0, top: '120%', zIndex: 60,
-                          minWidth: 140,
-                        }}
-                      >
-                        {['All', 'Active', 'Closed'].map(o => (
-                          <button
-                            key={o}
-                            onClick={() => { setFilter(o); setShowFilter(false) }}
-                            className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between cursor-pointer transition-colors"
-                            style={{
-                              background: filter === o ? 'var(--brand-50, #eff6ff)' : 'transparent',
-                              color:      filter === o ? 'var(--brand-color, #1d4ed8)' : '#374151',
-                              fontWeight: filter === o ? 700 : 500,
-                            }}
-                          >
-                            <span>{o}</span>
-                            {filter === o && <Check size={14} className="text-brand-600 ml-2" />}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  {recentProjects.length === 0 ? (
+                    <p className="text-xs text-gray-400 py-3 text-center">No recent projects</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {recentProjects.map(proj => (
+                        <div
+                          key={proj.uuid}
+                          onClick={() => navigateToProject(proj.uuid)}
+                          className="group w-full px-3.5 py-2.5 rounded-xl bg-white/70 hover:bg-white border border-gray-200/80 hover:border-brand-300 transition-all cursor-pointer shadow-2xs hover:shadow-xs flex items-center justify-between gap-3"
+                          role="button"
+                          tabIndex={0}
+                          title={`Open ${proj.name}`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="w-7 h-7 rounded-lg bg-amber-50 border border-amber-200/70 flex items-center justify-center text-amber-600 flex-shrink-0 shadow-2xs">
+                              <Folder size={15} className="fill-amber-400/25 stroke-[2.2]" />
+                            </div>
+                            <span className="font-semibold text-xs sm:text-sm text-gray-900 group-hover:text-brand-700 truncate transition-colors">
+                              {proj.name}
+                            </span>
+                            {proj.status && (
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex-shrink-0 ${
+                                proj.status === 'Active'
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-gray-100 text-gray-600'
+                              }`}>
+                                {proj.status}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0 text-[11px] text-gray-400">
+                            {(proj.updatedAt || proj.createdAt) && (
+                              <span>
+                                {formatRelativeOrDate(proj.updatedAt || proj.createdAt)}
+                              </span>
+                            )}
+                            <ChevronRight size={15} className="text-gray-400 group-hover:text-brand-600 group-hover:translate-x-0.5 transition-all" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-            {filteredProjects.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 text-center bg-white rounded-xl border border-gray-100 p-6">
-                <FolderOpen size={36} className="text-gray-300 mb-2" />
-                <p className="text-gray-600 font-semibold text-sm">No {filter} projects found</p>
-                <button
-                  onClick={() => setFilter('All')}
-                  className="text-xs text-brand-700 font-semibold mt-2 hover:underline"
-                >
-                  Show all projects
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
-                {filteredProjects.map(p => (
-                  <ProjectCard
-                    key={p.uuid}
-                    project={p}
-                    isUnlocked={licensedProjectSet.has(p.uuid) || licensedProjectSet.has('ALL_REPORTS')}
-                    onExport={() => handleExport(p)}
-                    onClick={() => navigateToProject(p.uuid)}
-                    onEdit={(e) => {
-                      e.stopPropagation()
-                      setEditingProject(p)
-                    }}
-                    onDelete={handleDelete}
-                    deleting={deleting === p.uuid}
-                  />
-                ))}
-              </div>
-            )}
+
+                {/* Recent Site Visits Card */}
+                <div className="liquid-glass-surface rounded-2xl p-4 sm:p-5 border border-white/60 shadow-xs flex flex-col min-w-0">
+                  <div className="flex items-center justify-between pb-3 mb-3 border-b border-gray-200/60">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-purple-50 border border-purple-200/70 flex items-center justify-center text-purple-700 flex-shrink-0 shadow-2xs">
+                        <ClipboardList size={15} className="stroke-[2.2]" />
+                      </div>
+                      <h2 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
+                        Recent Site Visits
+                      </h2>
+                    </div>
+                  </div>
+
+                  {recentReports.length === 0 ? (
+                    <p className="text-xs text-gray-400 py-3 text-center">No site visits recorded yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {recentReports.map(rep => (
+                        <div
+                          key={rep.uuid}
+                          onClick={() => navigateToProject(rep.projectUuid, rep.uuid)}
+                          className="group w-full px-3.5 py-2.5 rounded-xl bg-white/70 hover:bg-white border border-gray-200/80 hover:border-purple-300 transition-all cursor-pointer shadow-2xs hover:shadow-xs flex items-center justify-between gap-3"
+                          role="button"
+                          tabIndex={0}
+                          title={`Open ${rep.name || 'Site Visit'} in ${rep.projectName}`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="w-7 h-7 rounded-lg bg-purple-50 border border-purple-200/70 flex items-center justify-center text-purple-700 flex-shrink-0 shadow-2xs">
+                              <ClipboardList size={15} className="stroke-[2.2]" />
+                            </div>
+                            <span className="font-semibold text-xs sm:text-sm text-gray-900 group-hover:text-purple-700 truncate transition-colors">
+                              {rep.name || 'Site Visit'}
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-medium truncate max-w-[120px] sm:max-w-[200px] flex-shrink-0">
+                              {rep.projectName}
+                            </span>
+                            {rep.visitDate && (
+                              <span className="hidden sm:inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 font-medium flex-shrink-0">
+                                <Calendar size={10} />
+                                {formatDatePattern(rep.visitDate)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0 text-[11px] text-gray-400">
+                            {rep.sortTime && (
+                              <span>
+                                {formatRelativeOrDate(rep.sortTime)}
+                              </span>
+                            )}
+                            <ChevronRight size={15} className="text-gray-400 group-hover:text-purple-600 group-hover:translate-x-0.5 transition-all" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </>
@@ -390,170 +479,6 @@ export default function Dashboard() {
           <span>New Project</span>
         </button>
       </div>
-
-      {/* Edit Project Modal */}
-      {editingProject && (
-        <EditProjectModal
-          project={editingProject}
-          onClose={() => setEditingProject(null)}
-          onSaved={() => {
-            load()
-            setEditingProject(null)
-          }}
-        />
-      )}
-
-      {/* Project License Activation Modal */}
-      {payingProject && (
-        <LicenseActivationModal
-          project={payingProject}
-          onSuccess={() => {
-            setLicensedProjectSet(getLicensedProjectUuids())
-            setPayingProject(null)
-            load()
-          }}
-          onClose={() => {
-            setLicensedProjectSet(getLicensedProjectUuids())
-            setPayingProject(null)
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-function ProjectCard({ project, isUnlocked, onExport, onClick, onEdit, onDelete, deleting }) {
-  const drawingCount  = project.drawingCount  ?? 0
-  const pinCount      = project.pinCount      ?? (project.totalItems || 0)
-  const isClosed      = project.status === 'Closed'
-
-  return (
-    <div
-      onClick={onClick}
-      className={`rounded-2xl p-3.5 sm:p-4.5 cursor-pointer active:scale-[0.99] transition-all duration-200 group relative border overflow-hidden ${
-        isClosed
-          ? 'bg-white/80 border-gray-200/90 opacity-80 border-l-4 border-l-gray-400 shadow-xs'
-          : 'border-l-4 hover:-translate-y-0.5'
-      }`}
-      style={
-        !isClosed
-          ? {
-              borderLeftColor: 'var(--brand-button, #1d4ed8)',
-              borderColor: 'var(--brand-200, #bfdbfe)',
-              background: 'linear-gradient(135deg, var(--brand-50, #eff6ff) 0%, #ffffff 45%, var(--brand-50, #eff6ff) 100%)',
-              boxShadow: '0 4px 18px -2px rgba(var(--brand-button-rgb, 29, 78, 216), 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)',
-            }
-          : {}
-      }
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className={`font-semibold text-base truncate ${isClosed ? 'text-gray-700' : 'text-gray-900'}`}>{project.name}</h3>
-            <span
-              className="flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full border shadow-2xs transition-colors"
-              style={
-                isClosed
-                  ? {
-                      background: '#f1f5f9',
-                      color: '#475569',
-                      borderColor: '#cbd5e1',
-                    }
-                  : {
-                      background: 'var(--brand-100, #dbeafe)',
-                      color: 'var(--brand-800, #1e40af)',
-                      borderColor: 'var(--brand-200, #bfdbfe)',
-                    }
-              }
-            >
-              {STATUS_ICON[project.status] || STATUS_ICON.Active} {project.status || 'Active'}
-            </span>
-          </div>
-
-          {(project.number || project.address || project.client) && (
-            <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap text-xs text-gray-500">
-              {project.number && (
-                <span className="font-semibold text-gray-500">#{project.number}</span>
-              )}
-              {project.address && (
-                <span className="flex items-center gap-1 text-gray-600 truncate max-w-sm">
-                  <MapPin size={12} className="text-gray-400 flex-shrink-0" />
-                  <span className="truncate">{project.address}</span>
-                </span>
-              )}
-              {project.client && (
-                <span className="text-gray-400 truncate">
-                  {project.client}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-
-        <ChevronRight size={18} className="text-gray-300 group-hover:text-gray-500 group-hover:translate-x-0.5 transition-all flex-shrink-0 mt-0.5" />
-      </div>
-
-      {/* Key Plan, Punch Count, and Lock/Unlock status counter */}
-      <div className="flex items-center justify-between gap-2 mt-3 pt-0.5 min-w-0">
-        <div className="inline-flex items-center gap-2 sm:gap-4 px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-xl bg-white/70 backdrop-blur-md border border-white/80 shadow-2xs min-w-0">
-          <div className="text-center min-w-[28px] sm:min-w-[36px]">
-            <p className="text-sm sm:text-base font-bold text-gray-900 leading-tight">{drawingCount}</p>
-            <p className="text-[10px] sm:text-[11px] text-gray-500 font-semibold mt-0.5 whitespace-nowrap">Key Plans</p>
-          </div>
-          <div className="w-px h-5 sm:h-6 bg-gray-200/80 flex-shrink-0" />
-          <div className="text-center min-w-[28px] sm:min-w-[36px]">
-            <p className="text-sm sm:text-base font-bold text-gray-900 leading-tight">{pinCount}</p>
-            <p className="text-[10px] sm:text-[11px] text-gray-500 font-semibold mt-0.5 whitespace-nowrap">Punch Items</p>
-          </div>
-          <div className="w-px h-5 sm:h-6 bg-gray-200/80 flex-shrink-0" />
-          {/* Lock / Unlock Icon with 'Export' label */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation()
-              onExport?.(project)
-            }}
-            className={`text-center min-w-[28px] sm:min-w-[36px] px-1 sm:px-1.5 py-0.5 rounded-lg transition-all cursor-pointer active:scale-95 flex-shrink-0 ${
-              isUnlocked
-                ? 'text-emerald-600 hover:bg-emerald-50/80'
-                : 'text-amber-600 hover:bg-amber-50/80'
-            }`}
-            title={isUnlocked ? 'Export Full Project (Unlocked)' : 'Export Project (Pay to Unlock Full Export)'}
-          >
-            <div className="flex items-center justify-center">
-              {isUnlocked ? (
-                <Unlock size={16} className="text-emerald-600" />
-              ) : (
-                <Lock size={16} className="text-amber-600" />
-              )}
-            </div>
-            <p className={`text-[10px] sm:text-[11px] font-semibold mt-0.5 whitespace-nowrap ${
-              isUnlocked ? 'text-emerald-700' : 'text-amber-700 font-bold'
-            }`}>
-              Export
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center flex-shrink-0">
-          <button
-            onClick={onEdit}
-            className="liquid-pill w-8 h-8 sm:w-9 sm:h-9 p-1.5 sm:p-2 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
-            aria-label="Edit project"
-            title="Edit project details"
-          >
-            <Edit2 size={15} />
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Stat({ label, value, color = 'text-gray-800' }) {
-  return (
-    <div className="text-center min-w-[38px]">
-      <p className={`text-lg font-bold leading-none ${color}`}>{value}</p>
-      <p className="text-xs text-gray-500 font-medium mt-0.5 whitespace-nowrap">{label}</p>
     </div>
   )
 }

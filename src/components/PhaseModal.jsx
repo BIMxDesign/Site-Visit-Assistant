@@ -244,7 +244,7 @@ export default function PhaseModal({ projectUuid, phase, onClose, onSaved }) {
     }
   }
 
-  const modalTitle = isEditing ? (phase?.name || 'Report Name') : (name.trim() || 'New Report')
+  const modalTitle = isEditing ? (phase?.name || 'Site Visit Name') : (name.trim() || 'New Site Visit')
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col h-full w-full overflow-hidden select-none">
@@ -272,7 +272,7 @@ export default function PhaseModal({ projectUuid, phase, onClose, onSaved }) {
             <div className="flex flex-col justify-center min-w-0">
               <h1 className="text-xl font-bold tracking-tight leading-tight truncate">{modalTitle}</h1>
               <p className="text-brand-200 text-xs truncate leading-tight mt-0.5">
-                {isEditing ? 'Update observation scope and report configurations' : 'Create a new observation report for this project'}
+                {isEditing ? 'Update observation scope and site visit configurations' : 'Create a new site visit for this project'}
               </p>
             </div>
           </div>
@@ -294,15 +294,15 @@ export default function PhaseModal({ projectUuid, phase, onClose, onSaved }) {
               </p>
             )}
 
-            {/* Report Name, Created By & Description Card */}
+            {/* Site Visit Name, Created By & Description Card */}
             <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Report Name" required>
+                <Field label="Site Visit Name" required>
                   <input
                     ref={inputRef}
                     type="text"
                     className={INPUT}
-                    placeholder="e.g. Punch List Inspection"
+                    placeholder="e.g. Site Visit #1, Weekly Inspection"
                     value={name}
                     onChange={e => {
                       setName(e.target.value)
@@ -605,7 +605,7 @@ export default function PhaseModal({ projectUuid, phase, onClose, onSaved }) {
               className="sitepunch-btn-primary px-6 py-2.5 bg-brand-700 hover:bg-brand-800 disabled:opacity-60 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md"
               style={{ background: 'var(--brand-button, #1d4ed8)' }}
             >
-              {saving ? <Spinner /> : <><Check size={16} /> {isEditing ? 'Save Changes' : 'Create Report'}</>}
+              {saving ? <Spinner /> : <><Check size={16} /> {isEditing ? 'Save Changes' : 'Create Site Visit'}</>}
             </button>
           </div>
         </div>

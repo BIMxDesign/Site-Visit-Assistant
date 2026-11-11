@@ -32,7 +32,7 @@ jobs:
         run: npm run build
 
       - name: Package macOS App (.dmg and .zip)
-        run: npx electron-builder --mac --arm64 --x64 -c.mac.identity=null
+        run: npx electron-builder --mac --arm64 --universal --x64 -c.mac.identity=null
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -40,7 +40,7 @@ jobs:
       - name: Upload macOS Artifacts (.dmg and .zip)
         uses: actions/upload-artifact@v4
         with:
-          name: SitePunch-macOS-Application
+          name: SiteVisitAssistant-macOS-Application
           path: |
             release/*.dmg
             release/*.zip
