@@ -1,9 +1,15 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import { registerSW } from 'virtual:pwa-register'
 import App from './App.jsx'
 import './index.css'
 import { applyThemeColor, DEFAULT_THEME_COLOR, applyPinColor, DEFAULT_PIN_COLOR } from './utils/theme'
 import { applyAppFont, DEFAULT_FONT_ID } from './utils/font'
+
+// Register PWA service worker immediately for offline caching
+if (typeof window !== 'undefined') {
+  registerSW({ immediate: true })
+}
 
 // Apply persisted theme, pin color & font immediately before React mount
 try {

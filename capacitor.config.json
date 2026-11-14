@@ -7,8 +7,7 @@
     "contentInset": "never",
     "scrollEnabled": true,
     "limitsNavigationsToAppBoundDomains": false,
-    "preferredContentMode": "mobile",
-    "scheme": "Site Visit Assistant"
+    "preferredContentMode": "mobile"
   },
   "plugins": {
     "SplashScreen": {
