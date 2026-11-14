@@ -1,6 +1,7 @@
 import Dexie from 'dexie'
 import { v4 as uuidv4 } from 'uuid'
 import { getProjectLicense, importAndPreserveLicenses } from '../services/licenseService'
+import { isObservationOpenStatus } from '../utils/formatters'
 
 export const db = new Dexie('PunchListDB')
 
@@ -32,6 +33,96 @@ db.version(5).stores({
   floorPlans: '++id, &uuid, projectUuid, phaseUuid, name, createdAt',
   punchItems: '++id, &uuid, projectUuid, floorPlanUuid, phaseUuid, itemNumber, status, priority, trade, createdAt, updatedAt',
 })
+
+db.version(6).stores({
+  exportLogs: '++id, projectUuid, type, exportedAt',
+})
+
+// --- Export Log helpers ---
+/**
+ * Logs a PDF / ZIP / CSV export event for a specific project.
+ * @param {{ projectUuid: string, projectName?: string, type: 'pdf'|'zip'|'csv', reportName?: string, filename?: string, pageCount?: number }} entry
+ */
+export async function logExport(entry) {
+  try {
+    await db.exportLogs.add({
+      projectUuid:  entry.projectUuid  || '',
+      projectName:  entry.projectName  || '',
+      type:         entry.type         || 'pdf',
+      reportName:   entry.reportName   || '',
+      filename:     entry.filename     || '',
+      pageCount:    entry.pageCount    || null,
+      exportedAt:   Date.now(),
+    })
+  } catch (err) {
+    console.error('Failed to log export:', err)
+  }
+}
+
+/**
+ * Returns the most recent export log entries for a project (newest first).
+ * @param {string} projectUuid
+ * @param {number} [limit=50]
+ */
+export async function getExportLogs(projectUuid, limit = 50) {
+  try {
+    const all = await db.exportLogs
+      .where('projectUuid').equals(projectUuid)
+      .reverse()
+      .sortBy('exportedAt')
+    return all.slice(0, limit)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Returns aggregated export counts (pdf/zip) grouped by projectUuid.
+ * Used by the Logs tab to show summary counts without loading all rows.
+ */
+export async function getAllExportLogSummaries() {
+  try {
+    const all = await db.exportLogs.toArray()
+    const map = {}
+    for (const row of all) {
+      if (!map[row.projectUuid]) map[row.projectUuid] = { pdf: 0, zip: 0, csv: 0, project: 0, total: 0 }
+      if (row.type === 'pdf') map[row.projectUuid].pdf++
+      else if (row.type === 'zip') map[row.projectUuid].zip++
+      else if (row.type === 'csv') map[row.projectUuid].csv++
+      else if (row.type === 'project') map[row.projectUuid].project++
+      map[row.projectUuid].total++
+    }
+    return map
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Returns ALL export log entries from the last 12 months, newest first.
+ * Used by the Logs tab flat list view.
+ */
+export async function getAllExportLogsFlat(limit = 500) {
+  try {
+    const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000 // 12 months ago
+    const all = await db.exportLogs
+      .where('exportedAt').above(cutoff)
+      .reverse()
+      .sortBy('exportedAt')
+    return all.slice(0, limit)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Clears all export logs for a specific project (called when project is deleted).
+ */
+export async function clearExportLogs(projectUuid) {
+  try {
+    await db.exportLogs.where('projectUuid').equals(projectUuid).delete()
+  } catch {}
+}
 
 // --- Cybersecurity: Password Hashing with SHA-256 (Web Crypto API) ---
 export async function hashPassword(password, salt = 'sitepunch_v1_salt_') {
@@ -269,6 +360,8 @@ export async function deleteProject(uuid) {
   await db.punchItems.where('projectUuid').equals(uuid).delete()
   await db.phases.where('projectUuid').equals(uuid).delete()
   await db.projects.where('uuid').equals(uuid).delete()
+  // Also clear export logs for deleted project
+  try { await db.exportLogs.where('projectUuid').equals(uuid).delete() } catch {}
 }
 
 // --- Phase helpers ---
@@ -711,6 +804,35 @@ export async function exportProjectData(projectUuid) {
 
   return { project, phases, floorPlans, items, photos, licenses, exportedAt: Date.now() }
 }
+
+/**
+ * Export a full project (including license records and photos) and trigger a JSON backup download.
+ */
+export async function downloadProjectBackup(project) {
+  if (!project?.uuid) throw new Error('Missing project identifier for backup export.')
+  const data = await exportProjectData(project.uuid)
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  const sanitized = (project.name || 'project').replace(/[^a-z0-9_-]/gi, '_')
+  const filename = `${sanitized}-backup-${new Date().toISOString().slice(0, 10)}.json`
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+
+  // Log project data backup export
+  logExport({
+    projectUuid: project.uuid,
+    projectName: project.name || '',
+    type: 'project',
+    reportName: 'Full Project Backup (.json)',
+    filename: filename,
+    pageCount: null,
+  }).catch(() => {})
+}
 export async function importProjectData(data, targetUserEmail = null, asNewCopy = false) {
   if (!data || typeof data !== 'object') {
     throw new Error('Invalid project data format.')
@@ -997,7 +1119,7 @@ export async function mergeProjectData(targetProjectUuid, data) {
   // Resequence pins and update project counts
   await resequenceReportPins({ projectUuid: targetProjectUuid })
   const finalItems = await getPunchItems(targetProjectUuid)
-  const openCount = finalItems.filter(i => i.status === 'Open' || i.status === 'In Progress').length
+  const openCount = finalItems.filter(i => isObservationOpenStatus(i.status)).length
   updatedProject.totalItems = finalItems.length
   updatedProject.openItems = openCount
 

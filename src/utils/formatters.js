@@ -199,3 +199,36 @@ export function formatFirstAndLastInitial(firstName, lastName, fallbackFullName 
 
   return f
 }
+
+export const OBSERVATION_STATUSES = ['Open', 'On-Going', 'Closed']
+
+export const OBSERVATION_STATUS_BADGES = {
+  Open:          'bg-rose-50 text-rose-700 border-rose-200',
+  'On-Going':    'bg-amber-50 text-amber-700 border-amber-200',
+  Closed:        'bg-emerald-50 text-emerald-700 border-emerald-200',
+  'In Progress': 'bg-amber-50 text-amber-700 border-amber-200',
+  Completed:     'bg-emerald-50 text-emerald-700 border-emerald-200',
+}
+
+/**
+ * Normalize observation status strings into 'Open', 'On-Going', or 'Closed'.
+ */
+export function normalizeObservationStatus(raw) {
+  if (!raw) return 'Open'
+  const low = String(raw).trim().toLowerCase()
+  if (low === 'in progress' || low === 'on-going' || low === 'ongoing' || low === 'on going') {
+    return 'On-Going'
+  }
+  if (low === 'closed' || low === 'close' || low === 'completed' || low === 'complete') {
+    return 'Closed'
+  }
+  return 'Open'
+}
+
+/**
+ * Return true when an observation is not yet closed ('Open' or 'On-Going').
+ */
+export function isObservationOpenStatus(raw) {
+  return normalizeObservationStatus(raw) !== 'Closed'
+}
+

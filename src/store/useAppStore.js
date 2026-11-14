@@ -13,10 +13,12 @@ export const useAppStore = create((set, get) => ({
 
   // Modals
   showNewProject:       false,
+  newProjectReturnTo:   null,
   showPunchForm:        false,
   showPhotoAnnotator:   false,
   showPDFPreview:       false,
   showSettings:         false,
+  settingsTab:          'general',
   showFloorPlanManager: false,
   showAuthModal:        false,
   showPrivacyModal:     false,
@@ -70,6 +72,15 @@ export const useAppStore = create((set, get) => ({
       return 'YYYY-MM-DD'
     }
   })(),
+  photoQuality: (() => {
+    try {
+      const saved = localStorage.getItem('sitepunch_photo_quality')
+      if (saved === 'saver' || saved === 'balanced' || saved === 'original') return saved
+      return 'balanced'
+    } catch {
+      return 'balanced'
+    }
+  })(),
   exportedPdfCount: getExportedPdfCount(),
   showChecklist: (() => {
     try {
@@ -119,8 +130,11 @@ export const useAppStore = create((set, get) => ({
     } catch {}
   },
 
-  openNewProject:    () => set({ showNewProject: true }),
-  closeNewProject:   () => set({ showNewProject: false }),
+  openNewProject:    (opts) => set({
+    showNewProject: true,
+    newProjectReturnTo: opts?.returnTo === 'manage-projects' ? 'manage-projects' : null,
+  }),
+  closeNewProject:   () => set({ showNewProject: false, newProjectReturnTo: null }),
 
   openPunchForm:     (pin = null) => set({ showPunchForm: true,  pendingPin: pin }),
   closePunchForm:    ()           => set({ showPunchForm: false, pendingPin: null, currentPunchItemUuid: null }),
@@ -131,8 +145,11 @@ export const useAppStore = create((set, get) => ({
   openPDFPreview:    () => set({ showPDFPreview: true }),
   closePDFPreview:   () => set({ showPDFPreview: false }),
 
-  openSettings:    () => set({ showSettings: true }),
-  closeSettings:   () => set({ showSettings: false }),
+  openSettings:    (opts) => set({
+    showSettings: true,
+    settingsTab: typeof opts === 'string' ? opts : (opts?.tab || 'general'),
+  }),
+  closeSettings:   () => set({ showSettings: false, settingsTab: 'general' }),
 
   openFloorPlanManager:  () => set({ showFloorPlanManager: true }),
   closeFloorPlanManager: () => set({ showFloorPlanManager: false }),
@@ -164,6 +181,13 @@ export const useAppStore = create((set, get) => ({
     set({ dateFormat: fmt })
     try {
       localStorage.setItem('sitepunch_date_format', fmt)
+    } catch {}
+  },
+  setPhotoQuality: quality => {
+    const valid = (quality === 'saver' || quality === 'balanced' || quality === 'original') ? quality : 'balanced'
+    set({ photoQuality: valid })
+    try {
+      localStorage.setItem('sitepunch_photo_quality', valid)
     } catch {}
   },
   incrementExportedPdfCount: () => {

@@ -523,7 +523,7 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
           `To fix this in your WordPress store:\n` +
           `1. Go to WordPress Admin > WooCommerce > Settings > Advanced > REST API.\n` +
           `2. Check your API Key permissions — it MUST be set to "Read/Write" (keys with "Read" only will fail on activation).\n` +
-          `3. Copy your Consumer Key (ck_...) and Consumer Secret (cs_...) and enter them in SitePunch Settings > About tab under WordPress Store Connection.`
+          `3. Copy your Consumer Key (ck_...) and Consumer Secret (cs_...) and enter them in Site Visit Assistant Settings > About tab under WordPress Store Connection.`
         )
       } else if (resp.status === 404 || (errorMsg && errorMsg.toLowerCase().includes('not exist'))) {
         throw new Error(`The license key "${cleanKey}" does not exist in your WooCommerce store. Please verify the key.`)

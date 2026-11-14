@@ -22,11 +22,13 @@ import {
 import { ModalOverlay, ModalHeader, Field, INPUT, Spinner } from './NewProjectModal'
 import PhotoAnnotator from './PhotoAnnotator'
 import { v4 as uuidv4 } from 'uuid'
+import { OBSERVATION_STATUSES, normalizeObservationStatus } from '../utils/formatters'
+import { preparePhotoForQuality, getStoredPhotoQuality, readFileAsDataUrl } from '../utils/media'
 
 const PRIORITIES = ['Low', 'Medium', 'High', 'Critical']
 
 export default function PunchItemForm() {
-  const { closePunchForm, currentPunchItemUuid, currentPhaseUuid, currentProjectUuid } = useAppStore()
+  const { closePunchForm, currentPunchItemUuid, currentPhaseUuid, currentProjectUuid, photoQuality } = useAppStore()
 
   const [item,        setItem]        = useState(null)
   const [photos,      setPhotos]      = useState([])
@@ -46,7 +48,7 @@ export default function PunchItemForm() {
   const [tradeSuccess,      setTradeSuccess]      = useState('')
 
   const [form, setForm] = useState({
-    title: '', notes: '', trade: 'General', priority: 'Medium',
+    title: '', notes: '', trade: 'General', priority: 'Medium', status: 'Open',
     assignedTo: '', dueDate: ''
   })
 
@@ -92,6 +94,7 @@ export default function PunchItemForm() {
       notes:      it.notes      || '',
       trade:      it.trade      || 'General',
       priority:   it.priority   || 'Medium',
+      status:     normalizeObservationStatus(it.status),
       assignedTo: it.assignedTo || '',
       dueDate:    it.dueDate    || '',
     })
@@ -455,7 +458,9 @@ export default function PunchItemForm() {
     }
 
     const file = files[0]
-    const dataUrl = await readFileAsDataURL(file)
+    const activeQuality = photoQuality || getStoredPhotoQuality()
+    const rawDataUrl = await readFileAsDataUrl(file)
+    const dataUrl = await preparePhotoForQuality(rawDataUrl, activeQuality)
     setAnnotatingPhoto({ uuid: null, dataUrl })
     e.target.value = ''
   }
@@ -727,7 +732,7 @@ export default function PunchItemForm() {
               )}
             </div>
 
-            {/* Category + Priority */}
+            {/* Category + Due Date */}
             <div className="grid grid-cols-2 gap-3">
               {/* Customizable Category */}
               <div>
@@ -757,18 +762,25 @@ export default function PunchItemForm() {
                 </div>
               </div>
 
-              {/* Priority */}
+              {/* Due Date */}
+              <Field label="Due Date">
+                <input type="date" className={INPUT} value={form.dueDate} onChange={e => set('dueDate', e.target.value)} />
+              </Field>
+            </div>
+
+            {/* Status + Priority */}
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Status">
+                <select className={INPUT} value={form.status} onChange={e => set('status', e.target.value)}>
+                  {OBSERVATION_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
               <Field label="Priority">
                 <select className={INPUT} value={form.priority} onChange={e => set('priority', e.target.value)}>
                   {PRIORITIES.map(p => <option key={p}>{p}</option>)}
                 </select>
               </Field>
             </div>
-
-            {/* Due Date */}
-            <Field label="Due Date">
-              <input type="date" className={INPUT} value={form.dueDate} onChange={e => set('dueDate', e.target.value)} />
-            </Field>
             </div>
           </div>
 
@@ -1011,6 +1023,7 @@ export default function PunchItemForm() {
       {annotatingPhoto && (
         <PhotoAnnotator
           imageDataUrl={annotatingPhoto.dataUrl}
+          photoQuality={photoQuality || getStoredPhotoQuality()}
           onSave={saveAnnotatedPhoto}
           onCancel={() => setAnnotatingPhoto(null)}
         />
@@ -1029,12 +1042,4 @@ function PhotoThumb({ photo, onEdit, onDelete }) {
       </div>
     </div>
   )
-}
-
-function readFileAsDataURL(file) {
-  return new Promise(resolve => {
-    const reader = new FileReader()
-    reader.onload = e => resolve(e.target.result)
-    reader.readAsDataURL(file)
-  })
 }

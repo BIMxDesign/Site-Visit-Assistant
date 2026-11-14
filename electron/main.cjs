@@ -10,7 +10,7 @@ function createWindow() {
     height: 860,
     minWidth: 900,
     minHeight: 600,
-    title: 'SitePunch',
+    title: 'Site Visit Assistant',
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
     trafficLightPosition: isMac ? { x: 16, y: 16 } : undefined,
     backgroundColor: '#1e40af',

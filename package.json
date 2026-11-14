@@ -10,9 +10,19 @@
     "preview": "vite preview",
     "package:mac": "vite build && electron-builder --mac",
     "package:mac:dmg": "vite build && electron-builder --mac dmg",
-    "package:mac:zip": "vite build && electron-builder --mac zip"
+    "package:mac:zip": "vite build && electron-builder --mac zip",
+    "build:ios": "vite build && cap sync ios",
+    "cap:sync": "cap sync ios",
+    "cap:open:ios": "cap open ios"
   },
   "dependencies": {
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.6.2",
+    "@capacitor/keyboard": "^8.0.6",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.4",
     "clsx": "^2.1.1",
     "dexie": "^3.2.7",
     "dexie-react-hooks": "^1.1.7",
@@ -22,6 +32,7 @@
     "jszip": "^3.10.2",
     "konva": "^9.3.14",
     "lucide-react": "^0.456.0",
+    "pdfjs-dist": "^6.5.438",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-konva": "^18.2.10",

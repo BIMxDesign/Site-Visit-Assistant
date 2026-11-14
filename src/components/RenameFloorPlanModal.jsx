@@ -2,29 +2,32 @@ import React, { useState, useEffect, useRef } from 'react'
 import { X, Check, Edit2, ArrowLeft, Upload, FileImage, RefreshCw, AlertCircle } from 'lucide-react'
 import { saveFloorPlan } from '../db/database'
 import { Spinner } from './NewProjectModal'
-
-function readFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
+import PdfPageSelector, { useKeyPlanUpload, KEY_PLAN_FILE_ACCEPT } from './PdfPageSelector'
 
 export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
   const [name,        setName]        = useState(floorPlan?.name || '')
-  const [preview,     setPreview]     = useState(floorPlan?.imageData || null)
-  const [hasNewImage, setHasNewImage] = useState(false)
   const [saving,      setSaving]      = useState(false)
   const [error,       setError]       = useState('')
   const inputRef = useRef(null)
+  const {
+    preview,
+    hasNewMedia,
+    loadingMedia,
+    mediaError,
+    setMediaError,
+    pdfInfo,
+    needsPageSelection,
+    processFile,
+    confirmPdfPage,
+    openPagePicker,
+    cancelPageSelection,
+    resetMedia,
+  } = useKeyPlanUpload(floorPlan?.imageData || null)
 
   useEffect(() => {
     if (floorPlan) {
       setName(floorPlan.name || '')
-      setPreview(floorPlan.imageData || null)
-      setHasNewImage(false)
+      resetMedia(floorPlan.imageData || null)
     }
     setTimeout(() => {
       inputRef.current?.focus()
@@ -34,33 +37,27 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
 
   async function handleFile(e) {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setError('Please select a JPG, PNG, or WebP image file.')
-      return
-    }
-    if (file.size > 20 * 1024 * 1024) {
-      setError('Image must be under 20 MB.')
-      return
-    }
     setError('')
-    try {
-      const dataUrl = await readFile(file)
-      setPreview(dataUrl)
-      setHasNewImage(true)
-    } catch (_) {
-      setError('Failed to read image file. Please try another image.')
-    }
+    await processFile(file)
   }
 
   function handleResetImage() {
-    setPreview(floorPlan?.imageData || null)
-    setHasNewImage(false)
+    resetMedia(floorPlan?.imageData || null)
     setError('')
   }
 
   async function handleSave(e) {
     e?.preventDefault()
+    if (loadingMedia) {
+      setError('Please wait for the key plan file to finish loading.')
+      return
+    }
+    if (needsPageSelection) {
+      setError('Please select one page from the PDF for this key plan.')
+      return
+    }
     if (!name.trim()) {
       setError('Key plan name cannot be empty.')
       return
@@ -68,6 +65,7 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
 
     setSaving(true)
     setError('')
+    setMediaError('')
     try {
       const updated = {
         ...floorPlan,
@@ -111,7 +109,7 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
             <div className="flex flex-col justify-center min-w-0">
               <h1 className="text-xl font-bold tracking-tight leading-tight truncate">Edit Key Plan</h1>
               <p className="text-brand-200 text-xs truncate leading-tight mt-0.5">
-                Update key plan title and select or replace key plan image
+                Update key plan title and select or replace key plan image or PDF
               </p>
             </div>
           </div>
@@ -134,10 +132,10 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
           }}
         >
           <div className="max-w-4xl mx-auto w-full space-y-5">
-            {error && (
+            {(error || mediaError) && (
               <div className="flex items-center gap-2 text-red-600 text-xs bg-red-50 p-3.5 rounded-xl font-medium border border-red-200">
                 <AlertCircle size={16} className="flex-shrink-0" />
-                <span>{error}</span>
+                <span>{error || mediaError}</span>
               </div>
             )}
 
@@ -164,15 +162,15 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
                   <label className="text-xs font-bold text-gray-700 uppercase tracking-wide block">
-                    Key Plan Image
+                    Key Plan Sheet
                   </label>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    Select a new key plan image file (JPG, PNG, WebP up to 20 MB)
+                    Select a new key plan image (JPG, PNG, WebP up to 20 MB) or PDF (up to 30 MB)
                   </p>
                 </div>
-                {hasNewImage && (
+                {hasNewMedia && (
                   <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full border border-amber-200 shadow-2xs">
-                    New Image Selected
+                    New Sheet Selected
                   </span>
                 )}
               </div>
@@ -181,7 +179,12 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
               <div className="border border-gray-200 rounded-xl p-4 bg-gray-50 flex flex-col md:flex-row items-center gap-5">
                 {/* Visual Thumbnail */}
                 <div className="w-56 h-36 bg-white rounded-xl border border-gray-200 overflow-hidden flex-shrink-0 flex items-center justify-center shadow-xs relative group">
-                  {preview ? (
+                  {loadingMedia ? (
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Spinner />
+                      <span className="text-[11px] text-gray-500 font-medium">Rendering PDF...</span>
+                    </div>
+                  ) : preview ? (
                     <img
                       src={preview}
                       alt={name || 'Key plan'}
@@ -193,7 +196,7 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
                       <span className="text-[11px] text-gray-400">No Image</span>
                     </div>
                   )}
-                  {hasNewImage && (
+                  {hasNewMedia && !loadingMedia && (
                     <div className="absolute top-2 right-2 bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded shadow-sm">
                       NEW
                     </div>
@@ -203,10 +206,10 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
                 {/* Details & Controls */}
                 <div className="flex-1 space-y-2 text-center md:text-left min-w-0">
                   <h4 className="text-sm font-bold text-gray-800">
-                    {hasNewImage ? 'New Key Plan Image Ready to Apply' : 'Current Key Plan Image'}
+                    {hasNewMedia ? 'New Key Plan Sheet Ready to Apply' : 'Current Key Plan Sheet'}
                   </h4>
                   <p className="text-xs text-gray-500 leading-relaxed">
-                    Selecting a new key plan image updates the background sheet on this key plan while preserving all your existing pinned observations, notes, and photos.
+                    Selecting a new key plan image or PDF updates the background sheet on this key plan while preserving all your existing pinned observations, notes, and photos.
                   </p>
 
                   <div className="flex items-center gap-2 pt-2 flex-wrap justify-center md:justify-start">
@@ -215,16 +218,17 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
                       style={{ background: 'var(--brand-button, #1d4ed8)' }}
                     >
                       <Upload size={14} />
-                      <span>{preview ? 'Select New Key Plan Image' : 'Upload Key Plan Image'}</span>
+                      <span>{preview ? 'Select New Image or PDF' : 'Upload Key Plan Image or PDF'}</span>
                       <input
                         type="file"
-                        accept="image/png,image/jpeg,image/webp,image/jpg"
+                        accept={KEY_PLAN_FILE_ACCEPT}
+                        disabled={loadingMedia}
                         onChange={handleFile}
                         className="hidden"
                       />
                     </label>
 
-                    {hasNewImage && (
+                    {hasNewMedia && (
                       <button
                         type="button"
                         onClick={handleResetImage}
@@ -238,6 +242,15 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
                   </div>
                 </div>
               </div>
+
+              <PdfPageSelector
+                pdfInfo={pdfInfo}
+                needsPageSelection={needsPageSelection}
+                loading={loadingMedia}
+                onConfirmPage={confirmPdfPage}
+                onOpenPicker={openPagePicker}
+                onCancelPicker={cancelPageSelection}
+              />
             </div>
           </div>
         </div>
@@ -261,7 +274,7 @@ export default function RenameFloorPlanModal({ floorPlan, onClose, onSaved }) {
             </button>
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || loadingMedia || needsPageSelection}
               className="sitepunch-btn-primary px-6 py-2.5 bg-brand-700 hover:bg-brand-800 disabled:opacity-60 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
               style={{ background: 'var(--brand-button, #1d4ed8)' }}
             >

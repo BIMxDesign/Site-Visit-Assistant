@@ -21,7 +21,8 @@ import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
 import EditProjectModal from '../components/EditProjectModal'
 import PhaseModal from '../components/PhaseModal'
 import Breadcrumbs from '../components/Breadcrumbs'
-import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern } from '../utils/formatters'
+import ObservationStatusSelect from '../components/ObservationStatusSelect'
+import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern, normalizeObservationStatus } from '../utils/formatters'
 import { hexToRgb } from '../utils/theme'
 
 const REPORT_FILTER_OPTIONS = [
@@ -603,6 +604,11 @@ export default function ProjectDetail() {
     await load()
   }
 
+  const handleObservationStatusChange = async (targetItem, nextStatus) => {
+    setPunchItems(prev => prev.map(p => (p.uuid === targetItem.uuid ? { ...p, status: nextStatus } : p)))
+    await savePunchItem({ ...targetItem, status: nextStatus })
+  }
+
   const handleDeleteFloorPlan = async (uuid, name) => {
     const itemsOnFp = punchItems.filter(i => i.floorPlanUuid === uuid)
     const confirmed = window.confirm(
@@ -649,7 +655,7 @@ export default function ProjectDetail() {
     const desc = (item.description || '').toLowerCase()
     const cat = (item.category || '').toLowerCase()
     const room = (item.room || '').toLowerCase()
-    const status = (item.status || '').toLowerCase()
+    const status = normalizeObservationStatus(item.status).toLowerCase()
     return itemNum.includes(query) ||
       `#${itemNum}`.includes(query) ||
       title.includes(query) ||
@@ -1115,6 +1121,7 @@ export default function ProjectDetail() {
                             floorPlan={null}
                             phase={activePhase}
                             showPhase={false}
+                            onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
                             onClick={() => {
                               setCurrentPunchItem(item.uuid)
                               openPunchForm()
@@ -1225,6 +1232,7 @@ export default function ProjectDetail() {
                                     floorPlan={fp}
                                     phase={activePhase}
                                     showPhase={false}
+                                    onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
                                     onClick={() => {
                                       setCurrentPunchItem(item.uuid)
                                       openPunchForm()
@@ -1292,6 +1300,7 @@ export default function ProjectDetail() {
                             floorPlan={null}
                             phase={activePhase}
                             showPhase={false}
+                            onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
                             onClick={() => {
                               setCurrentPunchItem(item.uuid)
                               openPunchForm()
@@ -1712,6 +1721,7 @@ export default function ProjectDetail() {
                                   floorPlan={fp}
                                   phase={phase}
                                   showPhase={true}
+                                  onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
                                   onClick={() => { setCurrentPunchItem(item.uuid); openPunchForm() }}
                                   onDelete={() => handleDeletePunchItem(item.uuid)}
                                 />
@@ -2239,6 +2249,7 @@ function PunchItemRow({
   floorPlan,
   phase,
   showPhase = true,
+  onStatusChange,
   onClick,
   onEdit,
   onDelete,
@@ -2320,6 +2331,7 @@ function PunchItemRow({
           {truncateObservationTitle(item.title || item.notes || `Item #${item.itemNumber}`, 53)}
         </p>
         <div className="flex gap-2 mt-0.5 flex-wrap items-center">
+          <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="sm" />
           {item.priority && (
             <span className={`text-xs px-2 py-0.5 rounded-full font-bold shadow-2xs ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
               {item.priority}

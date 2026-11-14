@@ -22,7 +22,8 @@ import {
 import { v4 as uuidv4 } from 'uuid'
 import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
 import Breadcrumbs from '../components/Breadcrumbs'
-import { truncateObservationTitle, formatDatePattern } from '../utils/formatters'
+import ObservationStatusSelect from '../components/ObservationStatusSelect'
+import { truncateObservationTitle, formatDatePattern, normalizeObservationStatus } from '../utils/formatters'
 
 const PIN_SIZE = 28
 
@@ -31,13 +32,6 @@ const PRIORITY_BADGES = {
   Medium: 'bg-amber-100 text-amber-700',
   High: 'bg-orange-100 text-orange-700',
   Critical: 'bg-red-100 text-red-700',
-}
-
-const STATUS_BADGES = {
-  Open: 'bg-rose-50 text-rose-700 border-rose-200',
-  'In Progress': 'bg-amber-50 text-amber-700 border-amber-200',
-  Completed: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  Closed: 'bg-gray-100 text-gray-700 border-gray-200',
 }
 
 export default function FloorPlanView() {
@@ -468,6 +462,14 @@ export default function FloorPlanView() {
         ]
       },
       {
+        title: 'Status',
+        items: [
+          { id: 'Status: Open',     label: 'Status: Open' },
+          { id: 'Status: On-Going', label: 'Status: On-Going' },
+          { id: 'Status: Closed',   label: 'Status: Closed' },
+        ]
+      },
+      {
         title: 'Priority',
         items: [
           { id: 'Priority: Critical', label: 'Critical Priority' },
@@ -504,6 +506,13 @@ export default function FloorPlanView() {
     }
     if (obsFilter === 'Number (9→1)') {
       return list.sort((a, b) => (b.itemNumber || 0) - (a.itemNumber || 0))
+    }
+
+    if (obsFilter.startsWith('Status: ')) {
+      const s = obsFilter.replace('Status: ', '').trim()
+      return list
+        .filter(i => normalizeObservationStatus(i.status) === s)
+        .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
     }
 
     if (obsFilter.startsWith('Priority: ')) {
@@ -545,6 +554,12 @@ export default function FloorPlanView() {
   }, [punchItems, obsFilter])
 
   const sortedItems = filteredItems
+
+  // Update an observation's status directly from the list
+  const handleObservationStatusChange = async (targetItem, nextStatus) => {
+    setPunchItems(prev => prev.map(p => (p.uuid === targetItem.uuid ? { ...p, status: nextStatus } : p)))
+    await savePunchItem({ ...targetItem, status: nextStatus })
+  }
 
   // ── Drag & Drop Observation Reordering ──
   const [draggedObsUuid, setDraggedObsUuid] = useState(null)
@@ -1386,11 +1401,11 @@ export default function FloorPlanView() {
                         >
                           {truncateObservationTitle(item.title || item.notes || `Observation #${item.itemNumber}`, 60)}
                         </span>
-                        {item.status && item.status.toLowerCase() !== 'open' && (
-                          <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${STATUS_BADGES[item.status] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
-                            {item.status}
-                          </span>
-                        )}
+                        <ObservationStatusSelect
+                          status={item.status}
+                          size="xs"
+                          onChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
+                        />
                         {item.priority && (
                           <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
                             {item.priority}

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { getAnnotatorExportOptions, getStoredPhotoQuality } from '../utils/media'
 import {
   X, ArrowRight, Pen,
   Undo2, Redo2, Trash2, Check, Minus, Plus
@@ -34,9 +35,10 @@ const TOOLS = [
   { id: 'pen',   icon: <Pen size={16} />,                label: 'Pen' },
 ]
 
-export default function PhotoAnnotator({ imageDataUrl, onSave, onCancel }) {
+export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onCancel }) {
   const canvasRef  = useRef(null)
   const overlayRef = useRef(null)
+  const imageMetaRef = useRef({ naturalWidth: 0, naturalHeight: 0, canvasWidth: 0 })
 
   const [tool,    setTool]    = useState('cloud')
   const [color,   setColor]   = useState('#a40e26')
@@ -85,6 +87,11 @@ export default function PhotoAnnotator({ imageDataUrl, onSave, onCancel }) {
         const scale = Math.min(maxW / img.width, maxH / img.height, 1)
         const cw = Math.round(img.width * scale)
         const ch = Math.round(img.height * scale)
+        imageMetaRef.current = {
+          naturalWidth: img.naturalWidth || img.width,
+          naturalHeight: img.naturalHeight || img.height,
+          canvasWidth: cw,
+        }
 
         const fab = new Fabric.Canvas(canvas, {
           width: cw,
@@ -284,7 +291,14 @@ export default function PhotoAnnotator({ imageDataUrl, onSave, onCancel }) {
       onSave(imageDataUrl)
       return
     }
-    const dataUrl = fab.toDataURL({ format: 'jpeg', quality: 0.92 })
+    const { naturalWidth, naturalHeight, canvasWidth } = imageMetaRef.current
+    const exportOpts = getAnnotatorExportOptions(
+      naturalWidth,
+      naturalHeight,
+      canvasWidth || fab.getWidth(),
+      photoQuality || getStoredPhotoQuality()
+    )
+    const dataUrl = fab.toDataURL(exportOpts)
     onSave(dataUrl)
   }
 

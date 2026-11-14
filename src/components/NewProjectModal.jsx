@@ -7,7 +7,7 @@ import { saveProject, getAllProjects } from '../db/database'
 const STATUS_OPTIONS = ['Active', 'Closed']
 
 export default function NewProjectModal() {
-  const { closeNewProject, navigateToProject } = useAppStore()
+  const { closeNewProject, navigateToProject, newProjectReturnTo, openSettings } = useAppStore()
   const [form, setForm] = useState({
     name: '', number: '', address: '', client: '',
     contractor: '', description: '', status: 'Active'
@@ -16,6 +16,19 @@ export default function NewProjectModal() {
   const [error,  setError]  = useState('')
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  /**
+   * Close the modal and return to Settings > Manage Projects when launched from there.
+   */
+  function handleClose() {
+    const returnTo = newProjectReturnTo
+    closeNewProject()
+    if (returnTo === 'manage-projects') {
+      openSettings({ tab: 'projects' })
+      return true
+    }
+    return false
+  }
 
   async function handleSave() {
     if (!form.name.trim()) { setError('Project name is required.'); return }
@@ -38,17 +51,18 @@ export default function NewProjectModal() {
     const uuid = uuidv4()
     const now = Date.now()
     await saveProject({ uuid, ...form, createdAt: now, updatedAt: now, totalItems: 0, openItems: 0 })
-    closeNewProject()
-    navigateToProject(uuid)
+    if (!handleClose()) {
+      navigateToProject(uuid)
+    }
   }
 
   return (
-    <ModalOverlay onClose={closeNewProject}>
+    <ModalOverlay onClose={handleClose}>
       <div className="w-full h-full flex flex-col flex-1 overflow-hidden">
         <ModalHeader
           title="New Project"
           subtitle="Create a new construction punch list and inspection project"
-          onClose={closeNewProject}
+          onClose={handleClose}
         />
         <div
           className="flex-1 overflow-y-auto p-4 sm:p-6 pb-8 bg-gray-50"
@@ -106,7 +120,7 @@ export default function NewProjectModal() {
           <div className="max-w-4xl mx-auto w-full flex items-center justify-end gap-3">
             <button
               type="button"
-              onClick={closeNewProject}
+              onClick={handleClose}
               className="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold text-xs rounded-xl transition-colors min-h-[40px]"
             >
               Cancel

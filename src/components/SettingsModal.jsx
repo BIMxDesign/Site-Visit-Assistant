@@ -1,29 +1,39 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   ArrowLeft, Upload, Trash2, Check, Image as ImageIcon,
   AlertTriangle, Edit2, Info, Key, ShieldCheck, CheckCircle2,
   Smartphone, Palette, Type, Download, Shield, Plus, Lock, MapPin, Building2,
   User, LogOut, Calendar, Folder, FolderOpen, ClipboardList, AlertCircle, FileText,
-  GitMerge, ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy, Sparkles, X
+  ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy, Sparkles, X, Camera,
+  ScrollText, FileDown, Archive, FileSpreadsheet, ChevronRight, Package
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
   db, getSetting, setSetting, getAllProjects, deleteProject,
-  exportProjectData, importProjectData, mergeProjectData, updateUserProfile
+  downloadProjectBackup, importProjectData, updateUserProfile,
+  getExportLogs, getAllExportLogSummaries, getAllExportLogsFlat,
 } from '../db/database'
 import { Field, INPUT, Spinner } from './NewProjectModal'
 import EditProjectModal from './EditProjectModal'
 import LicenseActivationModal from './LicenseActivationModal'
+import DeleteProjectModal from './DeleteProjectModal'
 import {
   getLicensedProjectUuids,
   getCachedLicenses
 } from '../services/licenseService'
 import { THEME_PRESETS, applyThemeColor, DEFAULT_THEME_COLOR, PIN_COLOR_PRESETS, applyPinColor, DEFAULT_PIN_COLOR } from '../utils/theme'
 import { FONT_OPTIONS, applyAppFont, DEFAULT_FONT_ID } from '../utils/font'
+import {
+  PHOTO_QUALITY_OPTIONS,
+  DEFAULT_PHOTO_QUALITY,
+  prepareLogoForQuality,
+  readFileAsDataUrl,
+} from '../utils/media'
 
 export default function SettingsModal() {
   const {
     closeSettings,
+    settingsTab,
     openNewProject,
     companyName,
     companyLogo,
@@ -31,6 +41,7 @@ export default function SettingsModal() {
     appFont,
     pinColor,
     dateFormat,
+    photoQuality,
     exportedPdfCount,
     setCompanyName,
     setCompanyLogo,
@@ -38,6 +49,7 @@ export default function SettingsModal() {
     setAppFont,
     setPinColor,
     setDateFormat,
+    setPhotoQuality,
     currentProjectUuid,
     navigateToDashboard,
     openPrivacyModal,
@@ -68,21 +80,36 @@ export default function SettingsModal() {
   const [projects,      setProjects]      = useState([])
   const [loadingPrj,    setLoadingPrj]    = useState(true)
   const [deletingId,    setDeletingId]    = useState(null)
+  const [deletingProject, setDeletingProject] = useState(null)
   const [exportingId,   setExportingId]   = useState(null)
   const [importing,     setImporting]     = useState(false)
-  const [merging,       setMerging]       = useState(false)
-  const [mergeModalData, setMergeModalData] = useState(null)
   const [importConflictData, setImportConflictData] = useState(null)
+  const [copiedKeyUuid, setCopiedKeyUuid] = useState(null)
   const [showImportNotes, setShowImportNotes] = useState(true)
   const [editingProject, setEditingProject] = useState(null)
-  const [activeTab,     setActiveTab]     = useState('general') // 'general' | 'projects' | 'about'
+  const [activeTab,     setActiveTab]     = useState(settingsTab || 'general') // 'general' | 'projects' | 'logs' | 'about'
   const [activatingProject, setActivatingProject] = useState(null)
   const [licensedProjectSet, setLicensedProjectSet] = useState(() => getLicensedProjectUuids())
   const [activeLicenses,   setActiveLicenses]   = useState(() => getCachedLicenses())
 
+  // --- Export Logs state (Logs tab) ---
+  const [logSummaries,  setLogSummaries]  = useState({})  // { [projectUuid]: { pdf, zip, csv, total } }
+  const [allLogs,       setAllLogs]       = useState([])  // flat list, last 12 months, newest first
+  const [loadingLogs,   setLoadingLogs]   = useState(false)
+  const [logFilter,     setLogFilter]     = useState('all') // 'all' | 'pdf' | 'image' | 'csv'
+
   function reloadLicenses() {
     setLicensedProjectSet(getLicensedProjectUuids())
     setActiveLicenses(getCachedLicenses())
+  }
+
+  async function handleSelectPhotoQuality(qualityId) {
+    setPhotoQuality(qualityId)
+    try {
+      await setSetting('photoQuality', qualityId)
+    } catch (err) {
+      console.error('Failed to save photo quality setting:', err)
+    }
   }
 
   // User profile states - separate First Name and Last Name
@@ -181,7 +208,29 @@ export default function SettingsModal() {
     if (activeTab === 'projects' || activeTab === 'about') {
       loadProjects()
     }
+    if (activeTab === 'logs') {
+      loadLogsTab()
+    }
   }, [activeTab])
+
+  async function loadLogsTab() {
+    setLoadingLogs(true)
+    try {
+      const [logs, summaries] = await Promise.all([
+        getAllExportLogsFlat(500),
+        getAllExportLogSummaries(),
+      ])
+      setAllLogs(logs)
+      setLogSummaries(summaries)
+      if (projects.length === 0) {
+        loadProjects()
+      }
+    } catch (err) {
+      console.error('Failed to load export logs:', err)
+    } finally {
+      setLoadingLogs(false)
+    }
+  }
 
   // Sync state if store updates
   useEffect(() => {
@@ -202,16 +251,21 @@ export default function SettingsModal() {
   }, [themeColor])
 
   // Logo upload handler
-  function handleLogoUpload(e) {
-    const file = e.target.files[0]
+  async function handleLogoUpload(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
-    if (file.size > 2 * 1024 * 1024) {
-      alert('Logo file size must be less than 2MB.')
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Logo file size must be less than 5MB.')
       return
     }
-    const reader = new FileReader()
-    reader.onload = ev => setLogo(ev.target.result)
-    reader.readAsDataURL(file)
+    try {
+      const rawDataUrl = await readFileAsDataUrl(file)
+      const processedLogo = await prepareLogoForQuality(rawDataUrl, photoQuality || DEFAULT_PHOTO_QUALITY)
+      setLogo(processedLogo)
+    } catch {
+      alert('Failed to read logo file.')
+    }
   }
 
   function handleColorSelect(hex) {
@@ -292,21 +346,20 @@ export default function SettingsModal() {
     }
   }
 
-  // Delete project confirmation
-  async function handleDeleteProject(p) {
-    if (!window.confirm(`Delete project "${p.name}"?\n\nThis will permanently remove the project, all its observation reports, key plans, and photos from this device.`)) {
-      return
-    }
+  // Open safeguarded delete confirmation modal
+  function handleDeleteProject(p) {
+    setDeletingProject(p)
+  }
+
+  async function confirmDeleteProject(p) {
     setDeletingId(p.uuid)
     try {
       await deleteProject(p.uuid)
       await loadProjects()
+      setDeletingProject(null)
       if (currentProjectUuid === p.uuid) {
         navigateToDashboard()
       }
-    } catch (err) {
-      console.error('Failed to delete project:', err)
-      alert('Failed to delete project. Please try again.')
     } finally {
       setDeletingId(null)
     }
@@ -316,17 +369,7 @@ export default function SettingsModal() {
   async function handleExportProject(p) {
     setExportingId(p.uuid)
     try {
-      const data = await exportProjectData(p.uuid)
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      const sanitized = (p.name || 'project').replace(/[^a-z0-9_-]/gi, '_')
-      a.href = url
-      a.download = `${sanitized}-backup-${new Date().toISOString().slice(0, 10)}.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      await downloadProjectBackup(p)
     } catch (err) {
       console.error('Failed to export project:', err)
       alert('Failed to export project. Please try again.')
@@ -396,69 +439,28 @@ export default function SettingsModal() {
     }
   }
 
-  // Initiate project merge from JSON file
-  async function handleInitiateMerge(e, preselectedTargetUuid = null) {
-    const file = e.target.files[0]
-    if (!file) return
-    e.target.value = ''
+  // Copy an unlocked project's license key to the clipboard
+  async function handleCopyLicenseKey(projectUuid, licenseKey) {
+    if (!licenseKey) return
     try {
-      const text = await file.text()
-      const data = JSON.parse(text)
-
-      if (!data || !data.project || !data.project.name) {
-        alert('Invalid project backup file format.')
-        return
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(licenseKey)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = licenseKey
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
       }
-
-      if (projects.length === 0) {
-        alert('No existing projects found to merge into. Please use "Import Project" instead.')
-        return
-      }
-
-      // Auto-detect matching project by UUID or matching name
-      let targetUuid = preselectedTargetUuid
-      if (!targetUuid) {
-        const matching = projects.find(
-          p => p.uuid === data.project.uuid ||
-               (p.name && data.project.name && p.name.trim().toLowerCase() === data.project.name.trim().toLowerCase())
-        )
-        targetUuid = matching ? matching.uuid : (currentProjectUuid || projects[0]?.uuid || null)
-      }
-
-      setMergeModalData({
-        fileData: data,
-        fileName: file.name,
-        targetProjectUuid: targetUuid
-      })
+      setCopiedKeyUuid(projectUuid)
+      setTimeout(() => {
+        setCopiedKeyUuid(prev => (prev === projectUuid ? null : prev))
+      }, 1800)
     } catch (err) {
-      console.error('Failed to parse file for merging:', err)
-      alert(`Could not read project file: ${err.message || 'Invalid format'}`)
-    }
-  }
-
-  // Execute project merge
-  async function handleConfirmMerge(targetUuid, fileData) {
-    if (!targetUuid || !fileData) return
-    setMerging(true)
-    try {
-      const stats = await mergeProjectData(targetUuid, fileData)
-      await loadProjects()
-      reloadLicenses()
-      setMergeModalData(null)
-      setImportConflictData(null)
-      alert(
-        `Project "${stats.targetProjectName}" merged successfully!\n\n` +
-        `• Reports: ${stats.reportsAdded} added (${stats.reportsMatched} merged)\n` +
-        `• Key Plans: ${stats.keyPlansAdded} added (${stats.keyPlansMatched} preserved)\n` +
-        `• Observations: ${stats.itemsAdded} new pins added, ${stats.itemsUpdated} updated\n` +
-        `• Photos: ${stats.photosAdded} photos merged\n` +
-        (stats.licensePreserved ? `• Unlimited Export License Preserved\n` : '')
-      )
-    } catch (err) {
-      console.error('Merge failed:', err)
-      alert(`Merge failed: ${err.message || 'Unknown error'}`)
-    } finally {
-      setMerging(false)
+      console.warn('Copy license key failed:', err)
     }
   }
 
@@ -538,6 +540,22 @@ export default function SettingsModal() {
             style={activeTab === 'about' ? { borderColor: 'var(--brand-button, #1d4ed8)', color: 'var(--brand-button, #1d4ed8)' } : {}}
           >
             <span>About</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('logs')}
+            className={`py-3.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'logs'
+                ? 'border-brand-700 text-brand-700 font-bold'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+            style={activeTab === 'logs' ? { borderColor: 'var(--brand-button, #1d4ed8)', color: 'var(--brand-button, #1d4ed8)' } : {}}
+          >
+            <span>Logs</span>
+            {Object.values(logSummaries).reduce((s, v) => s + (v.total || 0), 0) > 0 && (
+              <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full font-bold">
+                {Object.values(logSummaries).reduce((s, v) => s + (v.total || 0), 0)}
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -859,6 +877,92 @@ export default function SettingsModal() {
                 </div>
               </div>
             </div>
+
+            {/* Photo Quality Preference Card */}
+            <div className="bg-white rounded-2xl p-4 sm:p-5 border border-gray-200/90 shadow-xs space-y-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'var(--brand-tint-10, rgba(164, 14, 38, 0.1))', color: 'var(--brand-button, #a40e26)' }}
+                  >
+                    <Camera size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900">Photo Quality</h3>
+                    <p className="text-xs text-gray-500">
+                      Applies to observation photos, key plans, company logos, and PDF/ZIP exports
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                {PHOTO_QUALITY_OPTIONS.map(opt => {
+                  const activeQuality = photoQuality || DEFAULT_PHOTO_QUALITY
+                  const isSelected = activeQuality === opt.id
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleSelectPhotoQuality(opt.id)}
+                      aria-pressed={isSelected}
+                      className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+                        isSelected
+                          ? 'shadow-xs'
+                          : 'border-gray-200 bg-gray-50/60 hover:bg-white hover:border-gray-300'
+                      }`}
+                      style={
+                        isSelected
+                          ? {
+                              borderColor: 'var(--brand-button, #a40e26)',
+                              background: 'var(--brand-tint-10, rgba(164, 14, 38, 0.06))',
+                              boxShadow: '0 0 0 1px var(--brand-button, #a40e26)',
+                            }
+                          : undefined
+                      }
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs font-bold text-gray-900">{opt.label}</span>
+                            {opt.badge && (
+                              <span
+                                className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                                  opt.id === 'balanced'
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                    : 'bg-gray-200/80 text-gray-600'
+                                }`}
+                              >
+                                {opt.badge}
+                              </span>
+                            )}
+                          </div>
+                          {isSelected && (
+                            <span
+                              className="w-4.5 h-4.5 rounded-full text-white flex items-center justify-center flex-shrink-0"
+                              style={{ background: 'var(--brand-button, #a40e26)' }}
+                            >
+                              <Check size={11} strokeWidth={3} />
+                            </span>
+                          )}
+                        </div>
+                        <p
+                          className={`text-[11px] font-semibold ${
+                            opt.id === 'balanced' ? 'text-emerald-700' : 'text-gray-700'
+                          }`}
+                        >
+                          {opt.sizeHint}
+                        </p>
+                      </div>
+                      <p className="text-[11px] text-gray-500 leading-snug">
+                        {opt.description}
+                      </p>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           </div>
         )}
 
@@ -915,7 +1019,7 @@ export default function SettingsModal() {
               <div>
                 <h3 className="text-sm font-bold text-gray-900">Stored Projects ({projects.length})</h3>
                 <p className="text-xs text-gray-400">
-                  Export, import, merge, or activate licenses for projects
+                  Export, import, or activate licenses for projects
                 </p>
               </div>
 
@@ -932,7 +1036,7 @@ export default function SettingsModal() {
                     type="file"
                     accept=".json"
                     className="hidden"
-                    disabled={importing || merging}
+                    disabled={importing}
                     onChange={handleImportProject}
                   />
                 </label>
@@ -942,7 +1046,7 @@ export default function SettingsModal() {
                   type="button"
                   onClick={() => {
                     closeSettings()
-                    openNewProject()
+                    openNewProject({ returnTo: 'manage-projects' })
                   }}
                   className="cursor-pointer px-3.5 py-2 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all active:scale-95"
                   style={{ background: 'var(--brand-button, #a40e26)' }}
@@ -968,7 +1072,10 @@ export default function SettingsModal() {
                   const isCurrent = currentProjectUuid === p.uuid
                   const isDeleting = deletingId === p.uuid
                   const isExporting = exportingId === p.uuid
-                  const isProjectUnlocked = p.isLicensed || Boolean(p.licenseKey) || licensedProjectSet.has(p.uuid)
+                  const cachedLic = activeLicenses.find(l => l.projectUuid === p.uuid || l.reportUuid === p.uuid)
+                  const licenseKey = p.licenseKey || cachedLic?.licenseKey || ''
+                  const licensedAt = p.licensedAt || cachedLic?.activatedAt || null
+                  const isProjectUnlocked = p.isLicensed || Boolean(licenseKey) || licensedProjectSet.has(p.uuid)
                   const isClosed = p.status === 'Closed'
 
                   return (
@@ -1043,6 +1150,37 @@ export default function SettingsModal() {
                             {p.status || 'Active'}
                           </span>
                         </div>
+                        {isProjectUnlocked && (licenseKey || licensedAt) && (
+                          <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1.5 ml-9.5 flex-wrap">
+                            {licenseKey && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopyLicenseKey(p.uuid, licenseKey)}
+                                className={`inline-flex items-center gap-1.5 font-mono font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
+                                  copiedKeyUuid === p.uuid
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                    : 'text-brand-700 bg-white/80 hover:bg-white border-brand-200/60'
+                                }`}
+                                title="Click to copy license key"
+                              >
+                                <span>Key: {licenseKey}</span>
+                                {copiedKeyUuid === p.uuid ? (
+                                  <>
+                                    <Check size={11} className="text-emerald-600 flex-shrink-0" />
+                                    <span className="font-sans text-[10px] font-bold">Copied</span>
+                                  </>
+                                ) : (
+                                  <Copy size={11} className="text-gray-400 flex-shrink-0" />
+                                )}
+                              </button>
+                            )}
+                            {licensedAt && (
+                              <span className="text-gray-500 font-medium">
+                                Activated {new Date(licensedAt).toLocaleDateString()}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Actions Container: cleanly separated on mobile, aligned right */}
@@ -1067,7 +1205,7 @@ export default function SettingsModal() {
                           )}
                         </div>
 
-                        {/* Export, Merge, Edit, Delete Buttons */}
+                        {/* Export, Edit, Delete Buttons */}
                         <div className="flex items-center gap-1.5 flex-shrink-0">
                           <button
                             onClick={() => handleExportProject(p)}
@@ -1082,20 +1220,6 @@ export default function SettingsModal() {
                             )}
                             <span>Export</span>
                           </button>
-                          <label
-                            className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
-                            title={`Merge an external backup into ${p.name}`}
-                          >
-                            <GitMerge size={13} />
-                            <span>Merge</span>
-                            <input
-                              type="file"
-                              accept=".json"
-                              className="hidden"
-                              disabled={merging}
-                              onChange={(e) => handleInitiateMerge(e, p.uuid)}
-                            />
-                          </label>
                           <button
                             onClick={() => setEditingProject(p)}
                             className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
@@ -1125,7 +1249,7 @@ export default function SettingsModal() {
               </div>
             )}
 
-            {/* Project Import & Merge Guidelines & Conditions Card (Below Stored Projects Cards) */}
+            {/* Project Import & Export Guidelines Card (Below Stored Projects Cards) */}
             <div className="bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/60 rounded-2xl border border-blue-200/80 p-4 sm:p-5 shadow-2xs space-y-3.5 mt-4">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2.5">
@@ -1134,10 +1258,10 @@ export default function SettingsModal() {
                   </div>
                   <div>
                     <h4 className="text-sm font-bold text-gray-900 leading-tight">
-                      Project Import &amp; Merge Guidelines
+                      Project Import &amp; Export Guidelines
                     </h4>
                     <p className="text-[11px] text-gray-500 mt-0.5">
-                      Conditions, duplicate handling, and conflict resolution rules
+                      Backup behavior, duplicate handling, and license retention rules
                     </p>
                   </div>
                 </div>
@@ -1152,12 +1276,11 @@ export default function SettingsModal() {
               </div>
 
               {showImportNotes && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1 text-xs text-gray-600">
-                  {/* Card 1: Import Conditions */}
+                <div className="pt-1 text-xs text-gray-600">
                   <div className="bg-white/90 backdrop-blur-xs p-3.5 sm:p-4 rounded-xl border border-blue-100 shadow-2xs space-y-2.5">
                     <div className="flex items-center gap-2 text-brand-800 font-bold text-xs pb-1.5 border-b border-gray-100">
                       <Download size={15} className="text-brand-600 flex-shrink-0" />
-                      <span>Project Import Conditions &amp; Behavior</span>
+                      <span>Project Import &amp; Export Conditions</span>
                     </div>
 
                     <ul className="space-y-2 text-[11px] leading-relaxed">
@@ -1170,13 +1293,12 @@ export default function SettingsModal() {
                       <li className="flex items-start gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-brand-500 mt-1.5 flex-shrink-0" />
                         <span>
-                          <strong className="text-gray-900 font-semibold">Duplicate Project Handling:</strong> If a project with the same name or internal ID already exists, SitePunch prompts you with three safe options:
+                          <strong className="text-gray-900 font-semibold">Duplicate Project Handling:</strong> If a project with the same name or internal ID already exists, Site Visit Assistant prompts you with two safe options:
                         </span>
                       </li>
                       <div className="ml-3.5 pl-2 border-l-2 border-blue-200 space-y-1.5 text-[11px] text-gray-500">
-                        <p><strong className="text-emerald-700">1. Merge with Existing:</strong> Non-destructively unites reports, drawings, pins, and photos into the local project.</p>
-                        <p><strong className="text-blue-700">2. Import as Copy:</strong> Creates a separate duplicate named <em>[Name] (Imported)</em> so original data is untouched.</p>
-                        <p><strong className="text-amber-700">3. Overwrite / Replace:</strong> Replaces local project with the file backup (ideal for full device restore).</p>
+                        <p><strong className="text-blue-700">1. Import as Copy:</strong> Creates a separate duplicate named <em>[Name] (Imported)</em> so original data is untouched.</p>
+                        <p><strong className="text-amber-700">2. Overwrite / Replace:</strong> Replaces local project with the file backup (ideal for full device restore).</p>
                       </div>
                       <li className="flex items-start gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-brand-500 mt-1.5 flex-shrink-0" />
@@ -1186,44 +1308,229 @@ export default function SettingsModal() {
                       </li>
                     </ul>
                   </div>
-
-                  {/* Card 2: Merge Conditions */}
-                  <div className="bg-white/90 backdrop-blur-xs p-3.5 sm:p-4 rounded-xl border border-emerald-100 shadow-2xs space-y-2.5">
-                    <div className="flex items-center gap-2 text-emerald-800 font-bold text-xs pb-1.5 border-b border-gray-100">
-                      <GitMerge size={15} className="text-emerald-600 flex-shrink-0" />
-                      <span>Project Merge Conditions &amp; Conflict Rules</span>
-                    </div>
-
-                    <ul className="space-y-2 text-[11px] leading-relaxed">
-                      <li className="flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 flex-shrink-0" />
-                        <span>
-                          <strong className="text-gray-900 font-semibold">Project Matching:</strong> Merges an incoming backup into the selected local project by matching name or internal ID.
-                        </span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 flex-shrink-0" />
-                        <span>
-                          <strong className="text-gray-900 font-semibold">Inspection Reports &amp; Key Plans:</strong> Reports with matching titles combine observations; new reports are appended in sequence. Existing drawings are preserved while new drawings are added.
-                        </span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 flex-shrink-0" />
-                        <span>
-                          <strong className="text-gray-900 font-semibold">Observations &amp; Pins:</strong> Unique observations are appended as new pins. Matching pins update only newer notes/status. All pins automatically resequence continuously (<em>#1, #2, #3...</em>) drawing-by-drawing.
-                        </span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 flex-shrink-0" />
-                        <span>
-                          <strong className="text-gray-900 font-semibold">Photos &amp; License Preservation:</strong> Unique annotated photos are consolidated under each pin, with duplicate photos skipped. If either version is licensed, the merged project remains fully unlocked for unlimited exports.
-                        </span>
-                      </li>
-                    </ul>
-                  </div>
                 </div>
               )}
             </div>
+
+          </div>
+        )}
+
+        {/* TAB: Logs — PDF / Image / CSV export history */}
+        {activeTab === 'logs' && (
+          <div className="max-w-4xl mx-auto space-y-4">
+
+            {/* Quick Stats Banner — matching front page style */}
+            {!loadingLogs && (
+              <div className="liquid-glass-surface rounded-2xl p-3 sm:p-4 shadow-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
+                  <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
+                      <FileDown size={14} className="text-red-600 stroke-[2.2]" />
+                      <span className="truncate">PDF Exports</span>
+                    </div>
+                    <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
+                      {Object.values(logSummaries).reduce((s, v) => s + (v.pdf || 0), 0)}
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
+                      <Archive size={14} className="text-blue-600 stroke-[2.2]" />
+                      <span className="truncate">Image Exports</span>
+                    </div>
+                    <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
+                      {Object.values(logSummaries).reduce((s, v) => s + (v.zip || 0), 0)}
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
+                      <FileSpreadsheet size={14} className="text-emerald-600 stroke-[2.2]" />
+                      <span className="truncate">CSV Exports</span>
+                    </div>
+                    <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
+                      {Object.values(logSummaries).reduce((s, v) => s + (v.csv || 0), 0)}
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
+                      <Folder size={14} className="text-amber-600 fill-amber-400/25 stroke-[2.2]" />
+                      <span className="truncate">Project Exports</span>
+                    </div>
+                    <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
+                      {Object.values(logSummaries).reduce((s, v) => s + (v.project || 0), 0)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Export History — single card, flat list */}
+            <div className="bg-white rounded-2xl border border-gray-200/90 shadow-xs overflow-hidden">
+
+              {/* Card header with filter + refresh */}
+              <div className="flex items-center justify-between flex-wrap gap-3 px-4 py-3.5 border-b border-gray-100">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'var(--brand-tint-10, rgba(164,14,38,0.08))', color: 'var(--brand-button, #a40e26)' }}
+                  >
+                    <ScrollText size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900">Export History</h3>
+                    <p className="text-[11px] text-gray-400">Last 12 months · PDF, image, and CSV exports per report</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {[
+                    { id: 'all',     label: 'All' },
+                    { id: 'pdf',     label: 'PDF' },
+                    { id: 'image',   label: 'Images' },
+                    { id: 'csv',     label: 'CSV' },
+                    { id: 'project', label: 'Projects' },
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setLogFilter(f.id)}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-colors cursor-pointer ${
+                        logFilter === f.id
+                          ? 'text-white border-transparent'
+                          : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                      }`}
+                      style={logFilter === f.id ? { background: 'var(--brand-button, #a40e26)', borderColor: 'var(--brand-button, #a40e26)' } : {}}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={loadLogsTab}
+                    className="p-1.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+                    title="Refresh"
+                  >
+                    <RefreshCw size={13} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Loading */}
+              {loadingLogs && (
+                <div className="flex items-center justify-center py-12 text-gray-400 gap-2">
+                  <Spinner />
+                  <span className="text-sm">Loading…</span>
+                </div>
+              )}
+
+              {/* Empty state */}
+              {!loadingLogs && allLogs.length === 0 && (
+                <div className="py-14 flex flex-col items-center gap-3 text-center px-6">
+                  <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center">
+                    <ScrollText size={22} className="text-gray-300" />
+                  </div>
+                  <p className="text-sm font-semibold text-gray-600">No exports in the last 12 months</p>
+                  <p className="text-xs text-gray-400">PDF, image, and CSV archive exports will appear here after your first download.</p>
+                </div>
+              )}
+
+              {/* Flat log list */}
+              {!loadingLogs && allLogs.length > 0 && (() => {
+                const filtered = allLogs.filter(log => {
+                  if (logFilter === 'pdf')     return log.type === 'pdf'
+                  if (logFilter === 'image')   return log.type === 'zip'
+                  if (logFilter === 'csv')     return log.type === 'csv'
+                  if (logFilter === 'project') return log.type === 'project'
+                  return true // 'all'
+                })
+
+                if (filtered.length === 0) {
+                  return (
+                    <p className="text-xs text-gray-400 text-center py-10">
+                      No {logFilter === 'image' ? 'image' : logFilter === 'project' ? 'project' : logFilter.toUpperCase()} exports in the last 12 months.
+                    </p>
+                  )
+                }
+
+                return (
+                  <div className="divide-y divide-gray-100">
+                    {filtered.map((log, i) => {
+                      const isToday = new Date(log.exportedAt).toDateString() === new Date().toDateString()
+                      const dateStr = isToday
+                        ? `Today, ${new Date(log.exportedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                        : new Date(log.exportedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+                      const isPdf = log.type === 'pdf'
+                      const isCsv = log.type === 'csv'
+                      const isProject = log.type === 'project'
+                      const typeMeta = isPdf
+                        ? { icon: <FileDown size={12} />, color: 'text-red-600 bg-red-50 border-red-100', label: 'PDF' }
+                        : isCsv
+                        ? { icon: <FileSpreadsheet size={12} />, color: 'text-emerald-600 bg-emerald-50 border-emerald-100', label: 'CSV' }
+                        : isProject
+                        ? { icon: <Folder size={12} />, color: 'text-amber-700 bg-amber-50 border-amber-200/80', label: 'Project' }
+                        : { icon: <Archive size={12} />, color: 'text-blue-600 bg-blue-50 border-blue-100', label: 'Images' }
+
+                      return (
+                        <div
+                          key={log.id || i}
+                          className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/60 transition-colors"
+                        >
+                          {/* Type badge */}
+                          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-md border flex-shrink-0 ${typeMeta.color}`}>
+                            {typeMeta.icon}
+                            {typeMeta.label}
+                          </span>
+
+                          {/* Project + report names */}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-gray-900 truncate leading-tight">
+                              {log.projectName || '—'}
+                            </p>
+                            <p className="text-[11px] text-gray-500 truncate leading-tight mt-0.5">
+                              {log.reportName && log.reportName !== log.projectName
+                                ? log.reportName
+                                : (log.filename || '—')}
+                            </p>
+                          </div>
+
+                          {/* Date + page count */}
+                          <div className="flex-shrink-0 text-right">
+                            <p className="text-[11px] text-gray-400 whitespace-nowrap">{dateStr}</p>
+                            {log.pageCount && (
+                              <p className="text-[10px] text-gray-300">{log.pageCount}p</p>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+
+              {/* Footer count */}
+              {!loadingLogs && allLogs.length > 0 && (
+                <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50/60">
+                  <p className="text-[11px] text-gray-400">
+                    {allLogs.filter(log => {
+                      if (logFilter === 'pdf')     return log.type === 'pdf'
+                      if (logFilter === 'image')   return log.type === 'zip'
+                      if (logFilter === 'csv')     return log.type === 'csv'
+                      if (logFilter === 'project') return log.type === 'project'
+                      return true
+                    }).length} export{allLogs.filter(log => {
+                      if (logFilter === 'pdf')     return log.type === 'pdf'
+                      if (logFilter === 'image')   return log.type === 'zip'
+                      if (logFilter === 'csv')     return log.type === 'csv'
+                      if (logFilter === 'project') return log.type === 'project'
+                      return true
+                    }).length !== 1 ? 's' : ''} shown · last 12 months
+                  </p>
+                </div>
+              )}
+            </div>
+
           </div>
         )}
 
@@ -1264,42 +1571,6 @@ export default function SettingsModal() {
                     When you export and import the project onto your iPad, iPhone, or PC, the license transfers automatically.
                   </p>
                 </div>
-              </div>
-
-              {/* Active Licenses List */}
-              <div className="space-y-2 pt-2 border-t border-gray-150">
-                <div className="flex items-center justify-between">
-                  <h5 className="font-bold text-gray-800 text-xs uppercase tracking-wide">
-                    Active Project Licenses on this Device ({activeLicenses.length})
-                  </h5>
-                </div>
-
-                {activeLicenses.length === 0 ? (
-                  <div className="p-4 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center text-xs text-gray-500">
-                    No license keys activated on this device yet. Enter your license key on any project card in the Manage Projects tab to unlock full report exports.
-                  </div>
-                ) : (
-                  <div className="divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden bg-gray-50/50">
-                    {activeLicenses.map((lic, idx) => (
-                      <div key={idx} className="p-3.5 text-xs flex items-center justify-between gap-3 hover:bg-white transition-colors">
-                        <div className="space-y-0.5">
-                          <p className="font-bold text-gray-900">{lic.projectName || 'Site Project'}</p>
-                          <p className="text-[11px] text-brand-700 font-mono font-semibold">
-                            Key: {lic.licenseKey}
-                          </p>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                            Active
-                          </span>
-                          <p className="text-[10px] text-gray-400 mt-0.5">
-                            {lic.activatedAt ? new Date(lic.activatedAt).toLocaleDateString() : 'Activated'}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
 
@@ -1413,107 +1684,13 @@ export default function SettingsModal() {
         />
       )}
 
-      {/* Merge Project Modal */}
-      {mergeModalData && (
-        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-gray-100 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-150">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl">
-                  <GitMerge size={20} />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-gray-900">Merge Project Backup</h3>
-                  <p className="text-xs text-gray-500">Unite incoming backup into a local project</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMergeModalData(null)}
-                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Source Backup File Info */}
-            <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 text-xs space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-gray-500 uppercase text-[10px]">Source Backup File</span>
-                <span className="text-[11px] font-mono text-gray-600 truncate max-w-[200px]">{mergeModalData.fileName}</span>
-              </div>
-              <p className="text-sm font-bold text-gray-900">
-                {mergeModalData.fileData.project?.name || 'Unnamed Project'}
-              </p>
-              <div className="flex items-center gap-2 text-gray-500 flex-wrap pt-0.5">
-                <span>{mergeModalData.fileData.phases?.length || 0} Reports</span>
-                <span>•</span>
-                <span>{mergeModalData.fileData.floorPlans?.length || 0} Key Plans</span>
-                <span>•</span>
-                <span>{mergeModalData.fileData.items?.length || 0} Punch Items</span>
-                <span>•</span>
-                <span>{mergeModalData.fileData.photos?.length || 0} Photos</span>
-              </div>
-            </div>
-
-            {/* Target Project Dropdown */}
-            <div className="space-y-1.5 text-xs">
-              <label className="font-bold text-gray-800 block">
-                Select Target Project on this Device:
-              </label>
-              <select
-                value={mergeModalData.targetProjectUuid || ''}
-                onChange={(e) => setMergeModalData({ ...mergeModalData, targetProjectUuid: e.target.value })}
-                className="w-full p-2.5 rounded-xl border border-gray-300 bg-white font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              >
-                {projects.map(p => (
-                  <option key={p.uuid} value={p.uuid}>
-                    {p.name} {p.number ? `(#${p.number})` : ''} - {p.reportCount || 0} reports
-                  </option>
-                ))}
-              </select>
-              <p className="text-[11px] text-gray-400">
-                Data from the backup file will be non-destructively merged into this project.
-              </p>
-            </div>
-
-            {/* Merge Guarantees / Rules */}
-            <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs space-y-1.5">
-              <p className="font-bold text-emerald-900 text-xs flex items-center gap-1.5">
-                <ShieldCheck size={14} className="text-emerald-700" />
-                Merge Guarantees &amp; Conflict Resolution:
-              </p>
-              <ul className="space-y-1 text-[11px] text-emerald-800">
-                <li>✓ <strong>Non-Destructive:</strong> No existing local reports or drawings are deleted.</li>
-                <li>✓ <strong>Smart Union:</strong> Matching reports combine observations; new reports are appended.</li>
-                <li>✓ <strong>Observation Resequencing:</strong> Pins are numbered continuously (#1, #2, #3...) across drawings.</li>
-                <li>✓ <strong>Photo Merging:</strong> All unique photos and markups are preserved.</li>
-                <li>✓ <strong>License Safety:</strong> If either copy is licensed, unlimited exports remain unlocked.</li>
-              </ul>
-            </div>
-
-            {/* Buttons */}
-            <div className="flex items-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setMergeModalData(null)}
-                disabled={merging}
-                className="flex-1 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-semibold text-xs hover:bg-gray-50 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => handleConfirmMerge(mergeModalData.targetProjectUuid, mergeModalData.fileData)}
-                disabled={merging || !mergeModalData.targetProjectUuid}
-                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-              >
-                {merging ? <Spinner /> : <GitMerge size={14} />}
-                <span>{merging ? 'Merging Data...' : 'Confirm & Merge Projects'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Safeguarded Delete Project Modal */}
+      {deletingProject && (
+        <DeleteProjectModal
+          project={deletingProject}
+          onClose={() => setDeletingProject(null)}
+          onConfirmDelete={confirmDeleteProject}
+        />
       )}
 
       {/* Import Duplicate / Conflict Modal */}
@@ -1535,27 +1712,7 @@ export default function SettingsModal() {
             </p>
 
             <div className="space-y-2.5 text-xs">
-              {/* Option 1: Merge */}
-              <button
-                type="button"
-                onClick={() => {
-                  handleConfirmMerge(importConflictData.existingProject.uuid, importConflictData.fileData)
-                }}
-                disabled={merging}
-                className="w-full text-left p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50 hover:border-emerald-300 transition-all flex items-start gap-3 group cursor-pointer"
-              >
-                <div className="p-2 bg-emerald-600 text-white rounded-lg group-hover:scale-105 transition-transform flex-shrink-0">
-                  <GitMerge size={16} />
-                </div>
-                <div>
-                  <p className="font-bold text-emerald-950 text-xs">Merge with Existing Project (Recommended)</p>
-                  <p className="text-[11px] text-emerald-800 mt-0.5">
-                    Combines reports, drawings, pins, and photos without losing local changes. Retains license unlocks.
-                  </p>
-                </div>
-              </button>
-
-              {/* Option 2: Copy */}
+              {/* Option 1: Copy */}
               <button
                 type="button"
                 onClick={() => executeImport(importConflictData.fileData, true)}
@@ -1573,7 +1730,7 @@ export default function SettingsModal() {
                 </div>
               </button>
 
-              {/* Option 3: Overwrite */}
+              {/* Option 2: Overwrite */}
               <button
                 type="button"
                 onClick={() => {

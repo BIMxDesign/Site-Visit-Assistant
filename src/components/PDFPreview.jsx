@@ -7,13 +7,22 @@ import {
 import JSZip from 'jszip'
 import { useAppStore } from '../store/useAppStore'
 import {
-  getProject, getFloorPlans, getPunchItems, getPhotos, getPhases, sortFloorPlans, getUsers
+  getProject, getFloorPlans, getPunchItems, getPhotos, getPhases, sortFloorPlans, getUsers,
+  logExport,
 } from '../db/database'
-import { formatVisitDateTime, formatDatePattern } from '../utils/formatters'
+import { formatVisitDateTime, formatDatePattern, normalizeObservationStatus } from '../utils/formatters'
 import { getPdfFont, getFontFamily, FONT_OPTIONS } from '../utils/font'
 import { hexToRgb } from '../utils/theme'
 import { checkProjectLicense } from '../services/licenseService'
 import LicenseActivationModal from './LicenseActivationModal'
+import {
+  getPhotoQualityProfile,
+  getKeyPlanQualityProfile,
+  getStoredPhotoQuality,
+  ensurePhotoMatchesQuality,
+  prepareKeyPlanImageForQuality,
+  prepareLogoForQuality,
+} from '../utils/media'
 
 function getImageDimensions(src) {
   return new Promise((resolve) => {
@@ -41,8 +50,11 @@ export default function PDFPreview() {
     currentUser,
     pinColor,
     appFont,
+    photoQuality,
     incrementExportedPdfCount,
   } = useAppStore()
+  const activeQuality = photoQuality || getStoredPhotoQuality()
+  const activeQualityProfile = getPhotoQualityProfile(activeQuality)
 
   const [project,    setProject]    = useState(null)
   const [floorPlans, setFloorPlans] = useState([])
@@ -213,19 +225,28 @@ export default function PDFPreview() {
     return true
   })
 
-  // Render floor plan image with circular pins, preserving natural resolution
+  // Render floor plan image with circular pins scaled to active Photo Quality profile
   async function renderFloorPlanWithPins(floorPlan, itemsToDraw) {
     if (!floorPlan?.imageData) return null
+    const kpProfile = getKeyPlanQualityProfile(activeQuality)
     return new Promise((resolve) => {
       const img = new Image()
       img.onload = () => {
         try {
-          const w = img.naturalWidth || img.width || 1600
-          const h = img.naturalHeight || img.height || 1200
+          const natW = img.naturalWidth || img.width || 1600
+          const natH = img.naturalHeight || img.height || 1200
+          const maxSide = Math.max(natW, natH)
+          const outScale = (kpProfile.id !== 'original' && Number.isFinite(kpProfile.maxDim) && maxSide > kpProfile.maxDim)
+            ? kpProfile.maxDim / maxSide
+            : 1
+          const w = Math.max(1, Math.round(natW * outScale))
+          const h = Math.max(1, Math.round(natH * outScale))
           const canvas = document.createElement('canvas')
           canvas.width = w
           canvas.height = h
           const ctx = canvas.getContext('2d')
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, w, h)
           ctx.drawImage(img, 0, 0, w, h)
 
           // Pin radius proportioned to image dimensions for crisp readability
@@ -290,7 +311,7 @@ export default function PDFPreview() {
           })
 
           resolve({
-            dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+            dataUrl: canvas.toDataURL('image/jpeg', kpProfile.quality),
             aspect: w / h,
             width: w,
             height: h,
@@ -358,7 +379,7 @@ export default function PDFPreview() {
         if (exportFields.keyPlans)       cols.push(escapeCSV(fp?.name || ''))
         if (exportFields.trade)          cols.push(escapeCSV(item.trade || ''))
         if (exportFields.priority)       cols.push(escapeCSV(item.priority || ''))
-        cols.push(escapeCSV(item.status || ''))
+        cols.push(escapeCSV(normalizeObservationStatus(item.status)))
         cols.push(escapeCSV(item.assignedTo || ''))
         if (exportFields.dueDate)        cols.push(escapeCSV(item.dueDate || ''))
         if (exportFields.notes)          cols.push(escapeCSV(item.notes || ''))
@@ -398,6 +419,16 @@ export default function PDFPreview() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+
+      // Log CSV export per-project for the Logs tab in Settings
+      logExport({
+        projectUuid: currentProjectUuid || '',
+        projectName: project?.name || '',
+        type: 'csv',
+        reportName: effectiveReport?.name || project?.name || '',
+        filename: `PunchList_${safeReport}${safeDrawing}_${new Date().toISOString().slice(0, 10)}.csv`,
+        pageCount: null,
+      }).catch(() => {})
 
       setDone(true)
       setTimeout(() => { setDone(false); closePDFPreview() }, 1200)
@@ -457,9 +488,10 @@ export default function PDFPreview() {
             keyPlansFolder.file(`${String(idx + 1).padStart(2, '0')}_${safeFpName}_with_pins.jpg`, base64Data, { base64: true })
           }
         } else if (fp.imageData) {
-          const base64Data = fp.imageData.split(',')[1]
+          const processedFpData = await prepareKeyPlanImageForQuality(fp.imageData, activeQuality)
+          const base64Data = processedFpData.split(',')[1]
           if (base64Data) {
-            const ext = fp.imageData.startsWith('data:image/png') ? 'png' : 'jpg'
+            const ext = processedFpData.startsWith('data:image/png') ? 'png' : 'jpg'
             keyPlansFolder.file(`${String(idx + 1).padStart(2, '0')}_${safeFpName}.${ext}`, base64Data, { base64: true })
           }
         }
@@ -477,9 +509,10 @@ export default function PDFPreview() {
         for (let pIdx = 0; pIdx < itemPhotos.length; pIdx++) {
           const photo = itemPhotos[pIdx]
           if (photo.imageData && photo.imageData.includes('base64,')) {
-            const base64Data = photo.imageData.split(',')[1]
+            const processedPhoto = await ensurePhotoMatchesQuality(photo.imageData, activeQuality)
+            const base64Data = processedPhoto.split(',')[1]
             if (base64Data) {
-              const ext = photo.imageData.startsWith('data:image/png') ? 'png' : 'jpg'
+              const ext = processedPhoto.startsWith('data:image/png') ? 'png' : 'jpg'
               const filename = `Pin_${itemNum}_Photo_${pIdx + 1}_${tradeTag}.${ext}`
               photosFolder.file(filename, base64Data, { base64: true })
               totalPhotosAdded++
@@ -524,7 +557,7 @@ export default function PDFPreview() {
       readme += `-----------------------------------------------------------\r\n`
       itemsToExport.forEach((it, idx) => {
         const pCount = (photosMap[it.uuid] || []).length
-        readme += `#${it.itemNumber || idx + 1} | Category: ${it.trade || 'General'} | Priority: ${it.priority || 'Medium'} | Status: ${it.status || 'Open'}\r\n`
+        readme += `#${it.itemNumber || idx + 1} | Category: ${it.trade || 'General'} | Priority: ${it.priority || 'Medium'} | Status: ${normalizeObservationStatus(it.status)}\r\n`
         if (it.notes) readme += `   Notes: ${it.notes}\r\n`
         if (pCount > 0) readme += `   Photos: ${pCount} attached\r\n`
         readme += `\r\n`
@@ -547,6 +580,16 @@ export default function PDFPreview() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+
+      // Log ZIP export per-project for the Logs tab in Settings
+      logExport({
+        projectUuid: currentProjectUuid || '',
+        projectName: project?.name || '',
+        type: 'zip',
+        reportName: effectiveReport?.name || project?.name || '',
+        filename: `${safeReportName}_Images_${formatDatePattern(new Date(), 'YYYY-MM-DD')}.zip`,
+        pageCount: null,
+      }).catch(() => {})
 
       setDone(true)
       setTimeout(() => { setDone(false); closePDFPreview() }, 1200)
@@ -602,7 +645,8 @@ export default function PDFPreview() {
       // ── MINIMALIST HEADER (NO COLORED BACKGROUNDS) ─────────────────────────
       if (companyLogo) {
         try {
-          const logoDim = await getImageDimensions(companyLogo)
+          const exportLogo = await prepareLogoForQuality(companyLogo, activeQuality)
+          const logoDim = await getImageDimensions(exportLogo)
           const maxLogoH = 14
           const maxLogoW = 42
           let logoW = maxLogoH * logoDim.aspect
@@ -611,7 +655,7 @@ export default function PDFPreview() {
             logoW = maxLogoW
             logoH = logoW / logoDim.aspect
           }
-          doc.addImage(companyLogo, 'AUTO', margin, y, logoW, logoH, '', 'FAST')
+          doc.addImage(exportLogo, 'AUTO', margin, y, logoW, logoH, '', 'FAST')
           y += logoH + 4
         } catch {}
       }
@@ -757,10 +801,28 @@ export default function PDFPreview() {
         }
       }
 
+      // Pre-process exported photos against active Photo Quality setting
+      const exportPhotosMap = {}
+      if (exportFields.photos) {
+        for (const it of itemsToExport) {
+          const origList = photosMap[it.uuid] || []
+          const processedList = []
+          for (const ph of origList.slice(0, 3)) {
+            if (ph?.imageData) {
+              const processedData = await ensurePhotoMatchesQuality(ph.imageData, activeQuality)
+              processedList.push({ ...ph, imageData: processedData })
+            } else {
+              processedList.push(ph)
+            }
+          }
+          exportPhotosMap[it.uuid] = processedList
+        }
+      }
+
       // Reusable item renderer
       const renderObservationItem = (item) => {
         const fp = floorPlans.find(f => f.uuid === item.floorPlanUuid)
-        const photos = exportFields.photos ? (photosMap[item.uuid] || []) : []
+        const photos = exportFields.photos ? (exportPhotosMap[item.uuid] || []) : []
 
         // Calculate adaptive photo dimensions on the right side:
         // 1. Photos are clearly readable and adaptively sized based on aspect ratio
@@ -919,9 +981,7 @@ export default function PDFPreview() {
         if (exportFields.trade) {
           headingParts.push(categoryLabel)
         }
-        if (item.status && item.status.toLowerCase() !== 'open') {
-          headingParts.push(`Status: ${item.status}`)
-        }
+        headingParts.push(`Status: ${normalizeObservationStatus(item.status)}`)
         if (item.assignedTo) {
           headingParts.push(`Assigned: ${item.assignedTo}`)
         }
@@ -1310,6 +1370,15 @@ export default function PDFPreview() {
       }
       try {
         incrementExportedPdfCount?.()
+        // Log PDF export per-project for the Logs tab in Settings
+        logExport({
+          projectUuid: currentProjectUuid || '',
+          projectName: project?.name || '',
+          type: 'pdf',
+          reportName: effectiveReport?.name || project?.name || '',
+          filename: pdfPreviewModal.filename || filename,
+          pageCount: pdfPreviewModal.pageCount || null,
+        }).catch(() => {})
       } catch {}
       setDone(true)
       setTimeout(() => {
@@ -1624,6 +1693,18 @@ export default function PDFPreview() {
                         </select>
                       </div>
                     </div>
+                  </div>
+                )}
+                {/* Active Photo Quality Summary (for PDF & Images ZIP) */}
+                {(format === 'pdf' || format === 'zip') && (
+                  <div className="flex items-center justify-between gap-2 flex-wrap px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200/80 text-xs">
+                    <div className="flex items-center gap-2 text-gray-700">
+                      <ImageIcon size={14} className="text-brand-600 flex-shrink-0" />
+                      <span className="font-semibold">Photo Quality:</span>
+                      <span className="font-bold text-gray-900">{activeQualityProfile.label}</span>
+                      <span className="text-gray-500">({activeQualityProfile.sizeHint})</span>
+                    </div>
+                    <span className="text-[11px] text-gray-400">Configured in Settings → Manage Projects</span>
                   </div>
                 )}
               </div>

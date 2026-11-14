@@ -9,6 +9,7 @@ import { useAppStore } from '../store/useAppStore'
 import { getAllProjects, deleteProject, db } from '../db/database'
 import EditProjectModal from '../components/EditProjectModal'
 import LicenseActivationModal from '../components/LicenseActivationModal'
+import DeleteProjectModal from '../components/DeleteProjectModal'
 import WelcomeChecklist from '../components/WelcomeChecklist'
 import { getLicensedProjectUuids } from '../services/licenseService'
 import { formatFirstAndLastInitial, formatDatePattern } from '../utils/formatters'
@@ -59,6 +60,7 @@ export default function Dashboard() {
   const [recentReports, setRecentReports] = useState([])
   const [loading, setLoading]   = useState(true)
   const [deleting, setDeleting] = useState(null)
+  const [deletingProject, setDeletingProject] = useState(null)
   const [editingProject, setEditingProject] = useState(null)
   const [payingProject, setPayingProject] = useState(null)
   const [licensedProjectSet, setLicensedProjectSet] = useState(() => getLicensedProjectUuids())
@@ -171,12 +173,18 @@ export default function Dashboard() {
   async function handleDelete(e, uuid) {
     e.stopPropagation()
     const proj = projects.find(p => p.uuid === uuid)
-    const name = proj?.name ? `"${proj.name}"` : 'this project'
-    if (!window.confirm(`Delete ${name} and all its key plans, pins, and photos?\n\nThis cannot be undone.`)) return
-    setDeleting(uuid)
-    await deleteProject(uuid)
-    await load()
-    setDeleting(null)
+    if (proj) setDeletingProject(proj)
+  }
+
+  async function confirmDeleteProject(proj) {
+    setDeleting(proj.uuid)
+    try {
+      await deleteProject(proj.uuid)
+      await load()
+      setDeletingProject(null)
+    } finally {
+      setDeleting(null)
+    }
   }
 
   // Active projects kept at the top by default unless user changes thru filters
@@ -223,7 +231,7 @@ export default function Dashboard() {
               <h1 className="text-xl font-bold tracking-tight leading-tight truncate">
                 {companyName?.trim() || 'Site Visit Assistant'}
               </h1>
-              <p className="text-brand-200 text-xs truncate leading-tight mt-0.5">Site Visit Report Tool</p>
+              <p className="text-brand-200 text-xs truncate leading-tight mt-0.5">Simply on-site reports for Architects and Contractors</p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -479,6 +487,15 @@ export default function Dashboard() {
           <span>New Project</span>
         </button>
       </div>
+
+      {/* Safeguarded Delete Project Modal */}
+      {deletingProject && (
+        <DeleteProjectModal
+          project={deletingProject}
+          onClose={() => setDeletingProject(null)}
+          onConfirmDelete={confirmDeleteProject}
+        />
+      )}
     </div>
   )
 }

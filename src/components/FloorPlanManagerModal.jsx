@@ -1,17 +1,34 @@
 import React, { useState, useEffect } from 'react'
 import { X, Image as ImageIcon, Trash2, Check, ArrowLeft } from 'lucide-react'
 import { v4 as uuidv4 } from 'uuid'
-import { saveFloorPlan, savePhase, getPhases, ensureProjectPhases } from '../db/database'
+import { saveFloorPlan, savePhase, getPhases, getFloorPlansByPhase, ensureProjectPhases } from '../db/database'
 import { Spinner } from './NewProjectModal'
+import PdfPageSelector, { useKeyPlanUpload, KEY_PLAN_FILE_ACCEPT } from './PdfPageSelector'
 
 export default function FloorPlanManagerModal({ projectUuid, defaultPhaseUuid, onClose, onSaved }) {
   const [name,       setName]       = useState('')
-  const [preview,    setPreview]    = useState(null) // base64
   const [saving,     setSaving]     = useState(false)
   const [error,      setError]      = useState('')
   const [saved,      setSaved]      = useState(false)
   const [phases,     setPhases]     = useState([])
   const [phaseUuid,  setPhaseUuid]  = useState(defaultPhaseUuid || '')
+  const {
+    preview,
+    loadingMedia,
+    mediaError,
+    setMediaError,
+    pdfInfo,
+    needsPageSelection,
+    importAllPages,
+    allowAllPages,
+    renderProgress,
+    processFile,
+    confirmPdfPage,
+    confirmAllPdfPages,
+    renderAllPagesForSave,
+    openPagePicker,
+    cancelPageSelection,
+  } = useKeyPlanUpload(null, { allowAllPages: true })
 
   useEffect(() => {
     async function loadPhases() {
@@ -31,42 +48,75 @@ export default function FloorPlanManagerModal({ projectUuid, defaultPhaseUuid, o
   const targetReportName = activeReport?.name || ''
 
   async function handleFile(e) {
-    const file = e.target.files[0]
+    const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
-    if (!file.type.startsWith('image/')) { setError('Please select a JPG or PNG image file.'); return }
-    if (file.size > 20 * 1024 * 1024)   { setError('Image must be under 20 MB.'); return }
     setError('')
-    const dataUrl = await readFile(file)
-    setPreview(dataUrl)
-    if (!name.trim()) setName(file.name.replace(/\.[^.]+$/, ''))
+    await processFile(file, (suggested, prevSuggested) => {
+      if (!suggested) return
+      setName(curr => {
+        if (!curr.trim() || (prevSuggested && curr === prevSuggested)) {
+          return suggested
+        }
+        return curr
+      })
+    })
   }
 
   async function handleSave() {
-    if (!preview)      { setError('Please select a key plan image.'); return }
-    if (!name.trim())  { setError('Please enter a key plan name.'); return }
+    if (loadingMedia)       { setError('Please wait for the key plan file to finish loading.'); return }
+    if (needsPageSelection) { setError('Please choose a PDF page option to continue.'); return }
+    if (!preview)           { setError('Please select a key plan image or PDF.'); return }
+    if (!name.trim())       { setError('Please enter a key plan name.'); return }
+    setError('')
+    setMediaError('')
     setSaving(true)
-    let effectivePhaseUuid = phaseUuid || defaultPhaseUuid || (phases[0]?.uuid) || null
-    if (!effectivePhaseUuid && projectUuid) {
-      const newPhaseUuid = uuidv4()
-      await savePhase({
-        uuid: newPhaseUuid,
-        projectUuid,
-        name: 'Report 1 - Initial Observation',
-        order: 1,
-        createdAt: Date.now(),
-      })
-      effectivePhaseUuid = newPhaseUuid
+    try {
+      let effectivePhaseUuid = phaseUuid || defaultPhaseUuid || (phases[0]?.uuid) || null
+      if (!effectivePhaseUuid && projectUuid) {
+        const newPhaseUuid = uuidv4()
+        await savePhase({
+          uuid: newPhaseUuid,
+          projectUuid,
+          name: 'Report 1 - Initial Observation',
+          order: 1,
+          createdAt: Date.now(),
+        })
+        effectivePhaseUuid = newPhaseUuid
+      }
+
+      if (importAllPages && pdfInfo?.totalPages > 1) {
+        const existingFps = effectivePhaseUuid ? await getFloorPlansByPhase(effectivePhaseUuid) : []
+        const baseOrder = existingFps.reduce((maxOrd, fp, idx) => Math.max(maxOrd, fp.order || idx + 1), existingFps.length)
+        const basePrefix = name.trim()
+        await renderAllPagesForSave(async (pageNum, imageData) => {
+          await saveFloorPlan({
+            uuid: uuidv4(),
+            projectUuid,
+            phaseUuid: effectivePhaseUuid,
+            name: `${basePrefix} - Page ${pageNum}`,
+            imageData,
+            order: baseOrder + pageNum,
+          })
+        })
+      } else {
+        await saveFloorPlan({
+          uuid: uuidv4(),
+          projectUuid,
+          phaseUuid: effectivePhaseUuid,
+          name: name.trim(),
+          imageData: preview,
+        })
+      }
+
+      setSaved(true)
+      setSaving(false)
+      setTimeout(() => { onSaved?.(); onClose() }, 600)
+    } catch (err) {
+      console.error('Failed to save key plan(s):', err)
+      setError('Failed to save key plan: ' + (err.message || 'Unknown error'))
+      setSaving(false)
     }
-    await saveFloorPlan({
-      uuid: uuidv4(),
-      projectUuid,
-      phaseUuid: effectivePhaseUuid,
-      name: name.trim(),
-      imageData: preview,
-    })
-    setSaved(true)
-    setSaving(false)
-    setTimeout(() => { onSaved?.(); onClose() }, 600)
   }
 
   return (
@@ -117,25 +167,40 @@ export default function FloorPlanManagerModal({ projectUuid, defaultPhaseUuid, o
         }}
       >
         <div className="max-w-4xl mx-auto w-full space-y-5">
-          {error && (
+          {(error || mediaError) && (
             <p className="text-red-600 text-xs bg-red-50 p-3 rounded-xl font-medium border border-red-100">
-              {error}
+              {error || mediaError}
             </p>
           )}
 
           {/* Upload zone */}
           <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm space-y-4">
             <label className="text-xs font-bold text-gray-700 uppercase tracking-wide block">
-              Key Plan Image File *
+              Key Plan File (Image or PDF) *
             </label>
             <label className={`block border-2 border-dashed rounded-xl cursor-pointer transition-colors ${
               preview ? 'border-brand-400 bg-brand-50/50' : 'border-gray-200 hover:border-brand-300 hover:bg-gray-50'
             }`}>
-              <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleFile} />
-              {preview ? (
+              <input type="file" accept={KEY_PLAN_FILE_ACCEPT} disabled={loadingMedia} className="hidden" onChange={handleFile} />
+              {loadingMedia ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3">
+                  <Spinner />
+                  <p className="text-xs font-semibold text-gray-600">Rendering key plan sheet...</p>
+                </div>
+              ) : preview ? (
                 <div className="relative p-3">
                   <img src={preview} alt="Key plan preview" className="w-full max-h-80 object-contain rounded-xl" />
-                  <div className="absolute top-5 right-5 bg-brand-600 text-white p-1.5 rounded-full shadow-md"><Check size={16}/></div>
+                  {importAllPages && pdfInfo?.totalPages > 1 ? (
+                    <div
+                      className="absolute top-5 right-5 text-white text-xs font-bold px-2.5 py-1 rounded-full shadow-md flex items-center gap-1"
+                      style={{ background: 'var(--brand-button, #1d4ed8)' }}
+                    >
+                      <Check size={14} />
+                      <span>All {pdfInfo.totalPages} Pages</span>
+                    </div>
+                  ) : (
+                    <div className="absolute top-5 right-5 bg-brand-600 text-white p-1.5 rounded-full shadow-md"><Check size={16}/></div>
+                  )}
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-12 gap-3">
@@ -144,16 +209,28 @@ export default function FloorPlanManagerModal({ projectUuid, defaultPhaseUuid, o
                   </div>
                   <div className="text-center">
                     <p className="font-semibold text-gray-700">Tap to select key plan</p>
-                    <p className="text-xs text-gray-400 mt-1">JPG or PNG · Max 20 MB</p>
+                    <p className="text-xs text-gray-400 mt-1">JPG, PNG, WebP (Max 20 MB) or PDF (Max 30 MB)</p>
                   </div>
                 </div>
               )}
             </label>
 
+            <PdfPageSelector
+              pdfInfo={pdfInfo}
+              needsPageSelection={needsPageSelection}
+              importAllPages={importAllPages}
+              allowAllPages={allowAllPages}
+              loading={loadingMedia}
+              onConfirmPage={confirmPdfPage}
+              onConfirmAllPages={confirmAllPdfPages}
+              onOpenPicker={openPagePicker}
+              onCancelPicker={cancelPageSelection}
+            />
+
             {/* Floor plan name */}
             <div>
               <label className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1 block">
-                Key Plan Name *
+                {importAllPages && pdfInfo?.totalPages > 1 ? 'Key Plan Name Prefix *' : 'Key Plan Name *'}
               </label>
               <input
                 className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-400 bg-white placeholder-gray-400 shadow-xs font-medium"
@@ -161,6 +238,18 @@ export default function FloorPlanManagerModal({ projectUuid, defaultPhaseUuid, o
                 value={name}
                 onChange={e => setName(e.target.value)}
               />
+              {importAllPages && pdfInfo?.totalPages > 1 && (
+                <p className="text-xs text-gray-500 mt-1.5">
+                  Will create <strong className="text-gray-700">{pdfInfo.totalPages} separate key plans</strong>:{' '}
+                  <span className="font-medium text-gray-700">
+                    {name.trim() || pdfInfo.baseName} - Page 1
+                  </span>{' '}
+                  through{' '}
+                  <span className="font-medium text-gray-700">
+                    {name.trim() || pdfInfo.baseName} - Page {pdfInfo.totalPages}
+                  </span>.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -185,24 +274,28 @@ export default function FloorPlanManagerModal({ projectUuid, defaultPhaseUuid, o
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || saved}
+            disabled={saving || saved || loadingMedia || needsPageSelection}
             className="sitepunch-btn-primary px-6 py-2.5 bg-brand-700 hover:bg-brand-800 disabled:opacity-60 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md"
             style={{ background: 'var(--brand-button, #1d4ed8)' }}
           >
-            {saved   ? <><Check size={16}/> Saved!</> :
-             saving  ? <Spinner /> :
-             <span>Add Key Plan</span>}
+            {saved ? (
+              <><Check size={16}/> {importAllPages && pdfInfo?.totalPages > 1 ? `Added ${pdfInfo.totalPages} Key Plans!` : 'Saved!'}</>
+            ) : saving ? (
+              renderProgress ? (
+                <><Spinner /> <span>Importing {renderProgress.current} / {renderProgress.total}...</span></>
+              ) : (
+                <Spinner />
+              )
+            ) : (
+              <span>
+                {importAllPages && pdfInfo?.totalPages > 1
+                  ? `Add ${pdfInfo.totalPages} Key Plans`
+                  : 'Add Key Plan'}
+              </span>
+            )}
           </button>
         </div>
       </div>
     </div>
   )
-}
-
-function readFile(file) {
-  return new Promise(resolve => {
-    const r = new FileReader()
-    r.onload = e => resolve(e.target.result)
-    r.readAsDataURL(file)
-  })
 }

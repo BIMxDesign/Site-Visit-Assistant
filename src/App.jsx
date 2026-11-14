@@ -31,6 +31,7 @@ export default function App() {
     setPinColor,
     setTimezone,
     setDateFormat,
+    setPhotoQuality,
   } = useAppStore()
 
   // Load persisted settings on mount
@@ -51,6 +52,7 @@ export default function App() {
       }
       const tz    = await getSetting('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago')
       const fmt   = await getSetting('dateFormat', 'YYYY-MM-DD')
+      const pq    = await getSetting('photoQuality', 'balanced')
       setCompanyName(name)
       setCompanyLogo(logo)
       setThemeColor(color)
@@ -58,6 +60,7 @@ export default function App() {
       setPinColor(pin)
       setTimezone(tz)
       setDateFormat(fmt)
+      setPhotoQuality(pq)
     }
     load()
   }, [])
