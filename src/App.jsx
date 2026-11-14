@@ -25,6 +25,11 @@ export default function App() {
     showPrivacyModal,
     showAuthModal,
     closeAuthModal,
+    closeNewProject,
+    closePunchForm,
+    closeSettings,
+    closePDFPreview,
+    closePrivacyModal,
     setCompanyName,
     setCompanyLogo,
     setThemeColor,
@@ -70,6 +75,22 @@ export default function App() {
   useEffect(() => {
     return initMobileKeyboardFix()
   }, [])
+
+  // Desktop keyboard shortcuts: Escape to dismiss top-level modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showAuthModal) closeAuthModal()
+        else if (showPrivacyModal) closePrivacyModal()
+        else if (showPDFPreview) closePDFPreview()
+        else if (showSettings) closeSettings()
+        else if (showPunchForm) closePunchForm()
+        else if (showNewProject) closeNewProject()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showAuthModal, showPrivacyModal, showPDFPreview, showSettings, showPunchForm, showNewProject, closeAuthModal, closePrivacyModal, closePDFPreview, closeSettings, closePunchForm, closeNewProject])
 
   return (
     <div className="flex flex-col h-full bg-gray-50 overflow-hidden">

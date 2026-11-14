@@ -806,16 +806,43 @@ export async function exportProjectData(projectUuid) {
 }
 
 /**
- * Export a full project (including license records and photos) and trigger a JSON backup download.
+ * Export a full project (including license records and photos) and trigger a JSON backup download or Native Cloud Share (Google Drive / iCloud).
  */
 export async function downloadProjectBackup(project) {
   if (!project?.uuid) throw new Error('Missing project identifier for backup export.')
   const data = await exportProjectData(project.uuid)
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
   const sanitized = (project.name || 'project').replace(/[^a-z0-9_-]/gi, '_')
   const filename = `${sanitized}-backup-${new Date().toISOString().slice(0, 10)}.json`
+
+  // 1. On mobile devices, offer Native Share (Save to Google Drive, iCloud Files, AirDrop, etc.)
+  if (typeof navigator !== 'undefined' && navigator.canShare && typeof File !== 'undefined') {
+    try {
+      const file = new File([blob], filename, { type: 'application/json' })
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Project Backup: ${project.name}`,
+          text: `Site Visit Assistant backup file for ${project.name}`
+        })
+        logExport({
+          projectUuid: project.uuid,
+          projectName: project.name || '',
+          type: 'project',
+          reportName: 'Full Project Backup (.json)',
+          filename: filename,
+          pageCount: null,
+        }).catch(() => {})
+        return
+      }
+    } catch (shareErr) {
+      if (shareErr.name === 'AbortError') return
+    }
+  }
+
+  // 2. Fallback to direct browser download
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
   a.href = url
   a.download = filename
   document.body.appendChild(a)
@@ -832,6 +859,59 @@ export async function downloadProjectBackup(project) {
     filename: filename,
     pageCount: null,
   }).catch(() => {})
+}
+
+/**
+ * Exports all projects, key plans, observations, photos, and licenses into a single archive
+ * and triggers cloud share (Google Drive, iCloud Files) or direct download.
+ */
+export async function downloadAllProjectsBackup() {
+  const allProjects = await getAllProjects()
+  if (!allProjects || allProjects.length === 0) {
+    throw new Error('No projects found to backup.')
+  }
+
+  const backupPackage = {
+    app: 'Site Visit Assistant',
+    version: '1.0.0',
+    exportedAt: new Date().toISOString(),
+    totalProjects: allProjects.length,
+    projects: []
+  }
+
+  for (const proj of allProjects) {
+    const pData = await exportProjectData(proj.uuid)
+    backupPackage.projects.push(pData)
+  }
+
+  const blob = new Blob([JSON.stringify(backupPackage, null, 2)], { type: 'application/json' })
+  const filename = `site-visit-assistant-ALL-PROJECTS-backup-${new Date().toISOString().slice(0, 10)}.json`
+
+  if (typeof navigator !== 'undefined' && navigator.canShare && typeof File !== 'undefined') {
+    try {
+      const file = new File([blob], filename, { type: 'application/json' })
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: 'Site Visit Assistant - All Projects Cloud Backup',
+          text: `Full cloud backup of all ${allProjects.length} projects from Site Visit Assistant`
+        })
+        return allProjects.length
+      }
+    } catch (shareErr) {
+      if (shareErr.name === 'AbortError') return allProjects.length
+    }
+  }
+
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  return allProjects.length
 }
 export async function importProjectData(data, targetUserEmail = null, asNewCopy = false) {
   if (!data || typeof data !== 'object') {

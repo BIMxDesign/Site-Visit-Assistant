@@ -30,21 +30,43 @@ export default defineConfig({
         name: 'Site Visit Assistant',
         short_name: 'Site Visit Assistant',
         description: 'Simply on-site reports for Architects and Contractors',
-        theme_color: '#1e40af',
+        theme_color: '#7e0b1d',
         background_color: '#ffffff',
         display: 'standalone',
-        orientation: 'portrait',
+        display_override: ['window-controls-overlay', 'standalone', 'minimal-ui'],
+        orientation: 'any',
+        categories: ['productivity', 'business', 'utilities'],
         scope: './',
         start_url: './',
         icons: [
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+        ],
+        shortcuts: [
+          {
+            name: 'Projects',
+            short_name: 'Projects',
+            description: 'View all inspection projects',
+            url: './#projects',
+            icons: [{ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' }]
+          },
+          {
+            name: 'Settings & Backup',
+            short_name: 'Settings',
+            description: 'Open Settings, Preferences, and Cloud Backup',
+            url: './#settings',
+            icons: [{ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' }]
+          }
         ]
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-        globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,woff2,webmanifest}'],
+        maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
+        globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,woff2,webmanifest,wasm}'],
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+        navigateFallback: 'index.html',
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

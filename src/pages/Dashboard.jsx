@@ -3,8 +3,9 @@ import {
   Plus, FolderOpen, Folder, Settings, Download, Trash2, Edit2,
   ChevronRight, AlertCircle, Filter, Check,
   FileImage, ClipboardList, Clock, CheckCircle, Shield, MapPin,
-  Lock, Unlock, Camera, FileText, Calendar
+  Lock, Unlock, Camera, FileText, Calendar, WifiOff
 } from 'lucide-react'
+import { usePwa } from '../utils/pwa'
 import { useAppStore } from '../store/useAppStore'
 import { getAllProjects, deleteProject, db } from '../db/database'
 import EditProjectModal from '../components/EditProjectModal'
@@ -75,6 +76,8 @@ export default function Dashboard() {
     totalPhotos: 0,
     totalExportedPdfs: 0,
   })
+
+  const { canInstall, isOffline, installApp } = usePwa()
 
   const handleExport = (proj) => {
     setCurrentProject(proj.uuid)
@@ -235,6 +238,25 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {isOffline && (
+              <span
+                className="px-2.5 py-1 rounded-xl bg-amber-500/20 text-amber-200 border border-amber-400/40 text-[11px] font-semibold flex items-center gap-1.5 backdrop-blur-md shadow-2xs"
+                title="Operating in offline mode. All your observations and reports are safely stored on this device."
+              >
+                <WifiOff size={13} className="text-amber-300 animate-pulse" />
+                <span className="hidden sm:inline">Offline</span>
+              </span>
+            )}
+            {canInstall && (
+              <button
+                onClick={installApp}
+                className="liquid-glass-btn px-2.5 py-1.5 rounded-xl text-white hover:text-white transition-all flex items-center gap-1.5 text-xs font-bold shadow-xs cursor-pointer border border-white/30 hover:border-white/60"
+                title="Install Site Visit Assistant application on Mac or Windows"
+              >
+                <Download size={14} className="text-white" />
+                <span className="hidden sm:inline">Install App</span>
+              </button>
+            )}
             {userDisplayName && (
               <span className="text-white/95 font-semibold text-xs sm:text-sm tracking-tight truncate max-w-[150px] sm:max-w-[220px] select-none pr-1">
                 {userDisplayName}

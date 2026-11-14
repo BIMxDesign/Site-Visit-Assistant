@@ -5,10 +5,12 @@ import App from './App.jsx'
 import './index.css'
 import { applyThemeColor, DEFAULT_THEME_COLOR, applyPinColor, DEFAULT_PIN_COLOR } from './utils/theme'
 import { applyAppFont, DEFAULT_FONT_ID } from './utils/font'
+import { initStoragePersistence } from './utils/pwa'
 
 // Register PWA service worker immediately for offline caching
 if (typeof window !== 'undefined') {
   registerSW({ immediate: true })
+  initStoragePersistence()
 }
 
 // Apply persisted theme, pin color & font immediately before React mount

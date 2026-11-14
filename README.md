@@ -1,17 +1,20 @@
 # Site Visit Assistant 📋🏗️
 
 > **Simply on-site reports for Architects and Contractors**  
-> A high-performance, mobile-first Progressive Web App (PWA) and native iOS application for site walkthroughs, key plan defect pinning, observation tracking, and professional PDF report generation.
+> A high-performance, offline-first Progressive Web App (PWA) and native Desktop Application (macOS & Windows) for architectural walkthroughs, key plan defect pinning, observation tracking, and professional PDF report generation.
 
 ---
 
 ## 🌟 Highlights
 
-- **100% Offline & Local-First:** All drawing blueprints, punch list observations, site photos, and notes are stored securely on-device using IndexedDB. No cloud dependency or account required.
-- **Dual Platform:** Run as an offline **Progressive Web App (PWA)** in Safari/Chrome or compile natively for **iOS (iPhone & iPad)** with Capacitor.
-- **Smart Mobile Experience:** Optimized with Apple Liquid Glass UI, notch/Dynamic Island safe-area support, and intelligent keyboard clearance that prevents fields from ever hiding behind the virtual typing pad.
-- **Key Plan & Blueprint Markup:** Upload image or PDF drawing sheets, drop pinpoint numbered markers, and attach defect photos with arrows, clouds, boxes, and pen markup.
+- **100% Offline & Local-First:** All drawing blueprints, punch list observations, site photos, and notes are stored securely on-device using IndexedDB. Works completely without an internet connection.
+- **Progressive Web App (PWA):** Installs directly onto your macOS, Windows PC, laptop, or tablet in one click with desktop window controls overlay and full offline cache.
+- **Native Desktop Builds:** Packageable as a standalone native desktop app for **macOS (`.dmg` / `.zip`)** and **Windows (`.exe` NSIS installer & portable)** via Electron.
+- **Protected Offline Storage:** Built-in persistent storage integration (`navigator.storage.persist()`) protects projects, blueprints, and photos from browser disk cleanup.
+- **Key Plan & Blueprint Markup:** Upload image or multi-page PDF architectural drawings, drop pinpoint numbered markers, and attach defect photos with arrows, clouds, boxes, and pen markup.
+- **Hands-Free Voice Dictation:** Integrated microphone speech-to-text dictation with automatic pause/silence flush and multi-sentence transcription.
 - **Professional PDF Reports:** Generate clean, branded field observation reports with covers, executive summaries, attendee lists, observation grids, and high-res annotated photos.
+- **Cloud Backup & Restore:** 1-click single-file and all-projects JSON backups with support for Google Drive, OneDrive, and local filesystem export.
 
 ---
 
@@ -41,68 +44,77 @@ Visit `http://localhost:5173` in your browser.
 
 ## 📦 Available Scripts
 
-| Command | Description |
-|---|---|
-| `npm run dev` | Starts Vite local development server on `localhost:5173` |
-| `npm run build` | Compiles production-ready web assets into `dist/` |
-| `npm run preview` | Previews the production build locally |
-| `npm run build:ios` | Builds web assets and synchronizes them with the native iOS Xcode project |
-| `npm run cap:sync` | Syncs web assets and native plugins into the `ios/` folder |
-| `npm run cap:open:ios` | Opens the iOS project in Xcode on macOS |
-| `npm run package:mac` | Builds standalone macOS desktop package (`.dmg` / `.zip`) |
+| Command | Platform | Description |
+|---|---|---|
+| `npm run dev` | All | Starts Vite local development server on `localhost:5173` |
+| `npm run build` | PWA / Web | Compiles optimized offline PWA production assets into `dist/` |
+| `npm run preview` | PWA / Web | Previews production PWA build locally |
+| `npm run package:mac` | macOS | Builds native macOS desktop package (`.dmg` & `.zip`) |
+| `npm run package:mac:dmg` | macOS | Builds standalone macOS `.dmg` installer |
+| `npm run package:mac:zip` | macOS | Builds macOS `.zip` portable application |
+| `npm run package:win` | Windows | Builds native Windows desktop package (`.exe` installer & portable) |
+| `npm run package:win:nsis` | Windows | Builds Windows NSIS setup installer (`.exe`) |
+| `npm run package:win:portable` | Windows | Builds standalone portable Windows executable |
+| `npm run package:all` | Mac & Win | Packages releases for both macOS and Windows simultaneously |
 
 ---
 
-## 🌐 Free Web Hosting & PWA Distribution
+## 🌐 Deploying the PWA (Free Web Hosting)
 
-### Option 1 — Deploy with GitHub Pages (Automated via GitHub Actions)
+### Option 1 — GitHub Pages (Automated via GitHub Actions)
 This repository includes a pre-configured GitHub Actions workflow (`.github/workflows/deploy.yml`):
 
 1. Push your repository to GitHub.
-2. In your GitHub repository, navigate to **Settings** → **Pages**.
+2. Go to **Settings** → **Pages** in your GitHub repository.
 3. Under **Build and deployment** → **Source**, select **GitHub Actions**.
-4. GitHub will automatically build and publish your app at:
+4. GitHub automatically builds and publishes the PWA:
    ```
    https://<YOUR-USERNAME>.github.io/<REPO-NAME>/
    ```
 
-### Option 2 — Deploy to Netlify
+### Option 2 — Netlify (Instant Drop)
 1. Run `npm run build`.
 2. Drag and drop the `dist/` folder onto [app.netlify.com/drop](https://app.netlify.com/drop).
-3. Your app is live instantly with an HTTPS domain!
+3. Your PWA is live immediately with an HTTPS URL.
 
 ---
 
-## 📱 Installing on Mobile Devices (PWA)
+## 💻 Installing as a Desktop App (PWA)
 
-Anyone can install the app directly on their mobile device without an App Store account:
+### macOS & Windows (Chrome, Edge, Brave)
+1. Open your deployed PWA URL in Google Chrome, Microsoft Edge, or Brave.
+2. Click the **Install App** button in the top header or the install icon in your browser's address bar.
+3. Click **Install**.
+4. The application now runs in its own dedicated, native desktop window with a custom icon in your macOS Dock or Windows Taskbar, functioning 100% offline.
 
-### iPhone & iPad (Safari)
-1. Open your live app URL in **Safari**.
-2. Tap the **Share** button (the square with an arrow pointing up).
-3. Scroll down and tap **Add to Home Screen**.
-4. Tap **Add** in the top right.
-5. The app launches full-screen with offline persistence, just like a native app.
-
-### Android (Chrome)
-1. Open the app URL in **Chrome**.
-2. Tap the menu (**⋮**) in the top right.
-3. Tap **Install app** or **Add to Home screen**.
+### macOS (Safari)
+1. Open the PWA URL in Safari (macOS Sonoma 14+).
+2. Click **File** → **Add to Dock**.
+3. Launch directly from your Mac Dock with full offline capability.
 
 ---
 
-## 🍎 Compiling for Native iOS (Xcode)
+## 🖥️ Building Native Desktop Installers (Electron)
 
-To run natively on iPhone/iPad via Xcode on macOS:
+### macOS Application
+Run on macOS:
+```bash
+# Build DMG installer
+npm run package:mac:dmg
 
-1. In Terminal on your Mac:
-   ```bash
-   npm install
-   npm run build:ios
-   npm run cap:open:ios
-   ```
-2. Connect your iPhone via USB, select your device in the top bar, and press **Play (▶ Run)** (`Cmd + R`).
-3. On your iPhone: Go to **Settings** → **General** → **VPN & Device Management** and tap **Trust**.
+# Output is saved to:
+# release/Site Visit Assistant-1.0.0-universal.dmg
+```
+
+### Windows Application
+Run on Windows:
+```bash
+# Build NSIS Setup Installer & Portable Executable
+npm run package:win
+
+# Output is saved to:
+# release/Site Visit Assistant-Setup-1.0.0-x64.exe
+```
 
 ---
 
@@ -110,27 +122,29 @@ To run natively on iPhone/iPad via Xcode on macOS:
 
 | Category | Features Included |
 |---|---|
+| **Platform** | Standalone Desktop (macOS & Windows) & Progressive Web App (PWA) with offline caching |
+| **Offline Engine** | Dexie.js (IndexedDB) with persistent storage lock; no external cloud database required |
 | **Project Management** | Multiple active and archived projects, project stats, client details, project cloning, JSON backup export & restore |
 | **Site Visits (Reports)** | Multi-phase walkthroughs, weather conditions, date/time logging, alphabetical & chronological attendee tracking |
 | **Key Plans & Blueprints** | Single & multi-page PDF sheet selection via PDF.js, image upload, pinch-to-zoom, pan, numbered defect pins |
-| **Defect Observations** | Status badges (*Open*, *In Progress*, *Resolved*), custom priority levels, due dates, assignee tagging, list view |
+| **Defect Observations** | Status badges (*Open*, *In Progress*, *Resolved*), custom categories/trades, priority levels, due dates, assignee tagging |
 | **Photo Annotations** | Camera capture, photo library picker, high-resolution canvas editor, arrows, cloud callouts, boxes, text, multi-color palette |
-| **Voice Dictation** | Speech-to-text voice recognition for rapid site notes hands-free |
+| **Voice Dictation** | Multi-sentence speech-to-text voice recognition with silence flush and seamless pause handling |
 | **Export Engine** | High-definition PDF generation with custom company logo, accent theme colors, ZIP photo archives, and CSV exports |
-| **Security & Privacy** | 100% offline local IndexedDB storage; no third-party tracking; data never leaves your device unless explicitly exported |
+| **Security & Privacy** | 100% local device storage; no third-party tracking; data never leaves your device unless explicitly exported |
 
 ---
 
 ## 🛠️ Built With
 
 - **Frontend:** [React 18](https://react.dev/), [Vite 5](https://vitejs.dev/), [Tailwind CSS](https://tailwindcss.com/)
-- **Native Platform:** [Capacitor 8](https://capacitorjs.com/) (iOS Native Shell & Plugins)
+- **Desktop Shell:** [Electron 33](https://www.electronjs.org/) & [electron-builder](https://www.electron.build/)
+- **PWA Service Worker:** [Vite Plugin PWA](https://vite-pwa-org.netlify.app/) & [Workbox](https://developer.chrome.com/docs/workbox/)
 - **Local Database:** [Dexie.js](https://dexie.org/) (IndexedDB wrapper)
 - **Drawing & Markup:** [Konva.js](https://konvajs.org/) / [react-konva](https://github.com/konvajs/react-konva), [Fabric.js](http://fabricjs.com/)
 - **PDF Engine:** [jsPDF](https://github.com/parallax/jsPDF), [PDF.js](https://mozilla.github.io/pdf.js/)
 - **State Management:** [Zustand](https://github.com/pmndrs/zustand)
 - **Icons:** [Lucide React](https://lucide.dev/)
-- **PWA Service Worker:** [Vite Plugin PWA](https://vite-pwa-org.netlify.app/) / [Workbox](https://developer.chrome.com/docs/workbox/)
 
 ---
 

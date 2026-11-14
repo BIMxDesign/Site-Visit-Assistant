@@ -120,13 +120,19 @@ export function initMobileKeyboardFix() {
     lockWindowToTop()
 
     const scrollParent = findScrollParent(el)
-    if (scrollParent) {
+    const isTouchVirtualKeyboard = typeof window !== 'undefined' && (
+      'ontouchstart' in window ||
+      navigator.maxTouchPoints > 0 ||
+      window.matchMedia('(pointer: coarse)').matches
+    )
+
+    if (scrollParent && isTouchVirtualKeyboard) {
       if (activeScrollContainer && activeScrollContainer !== scrollParent && originalPadding !== null) {
         activeScrollContainer.style.paddingBottom = originalPadding
       }
       activeScrollContainer = scrollParent
       originalPadding = scrollParent.style.paddingBottom || ''
-      // Provide extra scroll space at the bottom so fields near the end of a form can scroll up
+      // Provide extra scroll space at the bottom so fields near the end of a form can scroll up on mobile/tablet
       scrollParent.style.paddingBottom = '300px'
     }
 

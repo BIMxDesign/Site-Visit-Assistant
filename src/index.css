@@ -300,3 +300,31 @@ input[type="time"]::-webkit-date-and-time-value {
   50%       { transform: scale(1.2); }
 }
 .pin-new { animation: pinPulse 0.4s ease-in-out 2; }
+
+/* ── Desktop PWA & Electron Window Dragging ──────────────────── */
+header, .sitepunch-header {
+  -webkit-app-region: drag;
+}
+header button, header a, header input, header select,
+.sitepunch-header button, .sitepunch-header a, .sitepunch-header input, .sitepunch-header select,
+.liquid-glass-btn {
+  -webkit-app-region: no-drag;
+}
+
+/* ── Modern Sleek Desktop Scrollbars ───────────────────────── */
+@media (min-width: 768px) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.4);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.6);
+  }
+}

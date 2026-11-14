@@ -58,6 +58,8 @@ export default function PunchItemForm() {
   const recognitionRef    = useRef(null)
   const isListeningRef    = useRef(false)
   const latestInterimRef  = useRef('')
+  const processedFinalIndicesRef = useRef(new Set())
+  const restartTimeoutRef = useRef(null)
   const fileInputRef      = useRef(null)
 
   const initialLoadedUuid = useRef(null)
@@ -66,8 +68,14 @@ export default function PunchItemForm() {
   useEffect(() => {
     return () => {
       isListeningRef.current = false
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current)
+      }
       if (recognitionRef.current) {
         try {
+          recognitionRef.current.onresult = null
+          recognitionRef.current.onend = null
+          recognitionRef.current.onerror = null
           recognitionRef.current.abort()
         } catch {}
       }
@@ -287,42 +295,69 @@ export default function PunchItemForm() {
     closePunchForm()
   }
 
-  // ── Voice to text ──────────────────────────────────────────────────────────
-  async function toggleVoice() {
+  // ── Voice to text (Robust, continuous, multi-platform) ───────────────────
+  function appendSpeechToNotes(text) {
+    const clean = (text || '').trim()
+    if (!clean) return
+    setForm(prev => {
+      const current = (prev.notes || '').trim()
+      if (!current) return { ...prev, notes: clean }
+      return { ...prev, notes: `${current} ${clean}` }
+    })
+  }
+
+  function stopVoiceSession() {
+    isListeningRef.current = false
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current)
+      restartTimeoutRef.current = null
+    }
+
+    // Commit any pending interim speech (guarantees no dropped words on iOS/Safari)
+    const pending = (latestInterimRef.current || '').trim()
+    latestInterimRef.current = ''
+    setInterimText('')
+    if (pending) {
+      appendSpeechToNotes(pending)
+    }
+
+    setListening(false)
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onresult = null
+        recognitionRef.current.onerror = null
+        recognitionRef.current.onend = null
+        recognitionRef.current.stop()
+      } catch {}
+      recognitionRef.current = null
+    }
+  }
+
+  function startRecognitionSession() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
 
     if (!SR) {
       setError('Voice recognition is not supported in this browser. Please use Google Chrome, Microsoft Edge, or Safari, and ensure you are connected via HTTPS or localhost.')
-      return
-    }
-
-    // If currently listening, stop it cleanly and commit any pending speech
-    if (listening || isListeningRef.current) {
-      isListeningRef.current = false
-      if (latestInterimRef.current && latestInterimRef.current.trim()) {
-        const textToCommit = latestInterimRef.current.trim()
-        setForm(prev => {
-          const current = (prev.notes || '').trim()
-          return { ...prev, notes: current ? `${current} ${textToCommit}` : textToCommit }
-        })
-      }
-      latestInterimRef.current = ''
-      setInterimText('')
-      try {
-        recognitionRef.current?.stop()
-      } catch {}
       setListening(false)
+      isListeningRef.current = false
       return
     }
 
-    setError('')
-    setInterimText('')
-    latestInterimRef.current = ''
+    // Clean up any lingering previous instance before starting fresh
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onresult = null
+        recognitionRef.current.onerror = null
+        recognitionRef.current.onend = null
+        recognitionRef.current.abort()
+      } catch {}
+      recognitionRef.current = null
+    }
 
     try {
       const rec = new SR()
 
-      // Safely set continuous recognition (some mobile browsers throw if continuous is true)
       try {
         rec.continuous = true
       } catch {
@@ -332,6 +367,9 @@ export default function PunchItemForm() {
       rec.interimResults = true
       rec.lang = 'en-US'
 
+      // Reset index tracking for this fresh session cycle
+      processedFinalIndicesRef.current = new Set()
+
       rec.onstart = () => {
         isListeningRef.current = true
         setListening(true)
@@ -339,92 +377,91 @@ export default function PunchItemForm() {
       }
 
       rec.onresult = (e) => {
-        let interim = ''
-        let newFinal = ''
+        let currentInterim = ''
+        const newFinals = []
 
-        for (let i = e.resultIndex; i < e.results.length; i++) {
+        for (let i = 0; i < e.results.length; i++) {
           const res = e.results[i]
-          const transcript = res[0]?.transcript || ''
+          const transcript = (res[0]?.transcript || '').trim()
+          if (!transcript) continue
+
           if (res.isFinal) {
-            newFinal += transcript + ' '
+            // Process each final index exactly once to eliminate double transcription
+            if (!processedFinalIndicesRef.current.has(i)) {
+              processedFinalIndicesRef.current.add(i)
+              newFinals.push(transcript)
+            }
           } else {
-            interim += transcript
+            currentInterim += (currentInterim ? ' ' : '') + transcript
           }
         }
 
-        if (newFinal.trim()) {
+        if (newFinals.length > 0) {
           setError('')
+          latestInterimRef.current = currentInterim
+          setInterimText(currentInterim)
+          appendSpeechToNotes(newFinals.join(' '))
+        } else if (currentInterim) {
+          latestInterimRef.current = currentInterim
+          setInterimText(currentInterim)
+        } else {
           latestInterimRef.current = ''
           setInterimText('')
-          setForm(prev => {
-            const current = (prev.notes || '').trim()
-            const toAdd = newFinal.trim()
-            return { ...prev, notes: current ? `${current} ${toAdd}` : toAdd }
-          })
-        } else if (interim) {
-          latestInterimRef.current = interim
-          setInterimText(interim)
         }
       }
 
       rec.onerror = (e) => {
         console.warn('Speech recognition event error:', e.error)
         if (e.error === 'no-speech') {
-          // Normal brief pause while user is thinking; do not kill listening
+          // Normal brief pause while user is thinking; onend will seamlessly restart
           return
         }
 
         if (e.error === 'not-allowed' || e.error === 'permission-denied') {
-          setError('Microphone access blocked. Please click the camera/lock icon in your browser address bar to allow microphone access.')
-          isListeningRef.current = false
-          setListening(false)
-          setInterimText('')
-          latestInterimRef.current = ''
-        } else if (e.error === 'audio-capture') {
-          setError('No microphone found or another app is using the microphone.')
-          isListeningRef.current = false
-          setListening(false)
-          setInterimText('')
-          latestInterimRef.current = ''
-        } else if (e.error === 'network') {
+          setError('Microphone access blocked. Please click the lock or settings icon in your browser to allow microphone access.')
+          stopVoiceSession()
+          return
+        }
+
+        if (e.error === 'audio-capture') {
+          setError('No microphone found or another app is currently using the microphone.')
+          stopVoiceSession()
+          return
+        }
+
+        if (e.error === 'network') {
           setError('Voice recognition requires an active internet connection on this browser.')
-          isListeningRef.current = false
-          setListening(false)
-          setInterimText('')
-          latestInterimRef.current = ''
-        } else if (e.error !== 'aborted') {
+          stopVoiceSession()
+          return
+        }
+
+        if (e.error !== 'aborted') {
           setError(`Voice input notice: ${e.error}`)
-          isListeningRef.current = false
-          setListening(false)
-          setInterimText('')
-          latestInterimRef.current = ''
         }
       }
 
       rec.onend = () => {
-        if (isListeningRef.current) {
-          // Commit any pending interim text before restart
-          if (latestInterimRef.current && latestInterimRef.current.trim()) {
-            const textToCommit = latestInterimRef.current.trim()
-            setForm(prev => {
-              const current = (prev.notes || '').trim()
-              return { ...prev, notes: current ? `${current} ${textToCommit}` : textToCommit }
-            })
-            latestInterimRef.current = ''
-            setInterimText('')
-          }
-          // Browser ended session; seamlessly restart if user hasn't pressed stop
-          try {
-            rec.start()
-            return
-          } catch (err) {
-            console.warn('Speech recognition restart failed:', err)
-          }
-        }
-        isListeningRef.current = false
-        setListening(false)
-        setInterimText('')
+        // Commit any remaining unfinalized interim speech (WebKit silence flush)
+        const pending = (latestInterimRef.current || '').trim()
         latestInterimRef.current = ''
+        setInterimText('')
+        if (pending) {
+          appendSpeechToNotes(pending)
+        }
+
+        // If user hasn't explicitly stopped, seamlessly spawn a fresh instance
+        if (isListeningRef.current) {
+          if (restartTimeoutRef.current) {
+            clearTimeout(restartTimeoutRef.current)
+          }
+          restartTimeoutRef.current = setTimeout(() => {
+            if (isListeningRef.current) {
+              startRecognitionSession()
+            }
+          }, 120)
+        } else {
+          setListening(false)
+        }
       }
 
       recognitionRef.current = rec
@@ -432,10 +469,20 @@ export default function PunchItemForm() {
       isListeningRef.current = true
       setListening(true)
     } catch (err) {
-      console.error('Failed to start speech recognition:', err)
-      isListeningRef.current = false
-      setListening(false)
+      console.error('Failed to start speech recognition session:', err)
+      stopVoiceSession()
       setError(`Could not start voice recognition: ${err.message || 'Microphone blocked or not supported'}`)
+    }
+  }
+
+  function toggleVoice() {
+    if (listening || isListeningRef.current) {
+      stopVoiceSession()
+    } else {
+      setError('')
+      latestInterimRef.current = ''
+      setInterimText('')
+      startRecognitionSession()
     }
   }
 

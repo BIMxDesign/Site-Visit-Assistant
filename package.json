@@ -11,9 +11,10 @@
     "package:mac": "vite build && electron-builder --mac",
     "package:mac:dmg": "vite build && electron-builder --mac dmg",
     "package:mac:zip": "vite build && electron-builder --mac zip",
-    "build:ios": "vite build && cap sync ios",
-    "cap:sync": "cap sync ios",
-    "cap:open:ios": "cap open ios"
+    "package:win": "vite build && electron-builder --win",
+    "package:win:nsis": "vite build && electron-builder --win nsis",
+    "package:win:portable": "vite build && electron-builder --win portable",
+    "package:all": "vite build && electron-builder --mac --win"
   },
   "dependencies": {
     "@capacitor/cli": "^8.6.2",
@@ -106,6 +107,32 @@
         "width": 540,
         "height": 380
       }
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/icons/icon-512.png",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Site Visit Assistant"
     }
   },
   "description": "Simply on-site reports for Architects and Contractors"

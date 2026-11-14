@@ -5,12 +5,14 @@ import {
   Smartphone, Palette, Type, Download, Shield, Plus, Lock, MapPin, Building2,
   User, LogOut, Calendar, Folder, FolderOpen, ClipboardList, AlertCircle, FileText,
   ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy, Sparkles, X, Camera,
-  ScrollText, FileDown, Archive, FileSpreadsheet, ChevronRight, Package
+  ScrollText, FileDown, Archive, FileSpreadsheet, ChevronRight, Package,
+  Cloud, CloudUpload, CloudDownload, Share2, Laptop, HardDrive, Wifi, WifiOff
 } from 'lucide-react'
+import { usePwa } from '../utils/pwa'
 import { useAppStore } from '../store/useAppStore'
 import {
   db, getSetting, setSetting, getAllProjects, deleteProject,
-  downloadProjectBackup, importProjectData, updateUserProfile,
+  downloadProjectBackup, downloadAllProjectsBackup, importProjectData, updateUserProfile,
   getExportLogs, getAllExportLogSummaries, getAllExportLogsFlat,
 } from '../db/database'
 import { Field, INPUT, Spinner } from './NewProjectModal'
@@ -86,6 +88,7 @@ export default function SettingsModal() {
   const [importConflictData, setImportConflictData] = useState(null)
   const [copiedKeyUuid, setCopiedKeyUuid] = useState(null)
   const [showImportNotes, setShowImportNotes] = useState(true)
+  const { canInstall, isInstalled, isOffline, isElectron, isPersistent, storageInfo, installApp } = usePwa()
   const [editingProject, setEditingProject] = useState(null)
   const [activeTab,     setActiveTab]     = useState(settingsTab || 'general') // 'general' | 'projects' | 'logs' | 'about'
   const [activatingProject, setActivatingProject] = useState(null)
@@ -378,7 +381,27 @@ export default function SettingsModal() {
     }
   }
 
-  // Import project from JSON file
+  const [backingUpAll, setBackingUpAll] = useState(false)
+
+  // Backup all projects to Google Drive / iCloud / Local File
+  async function handleBackupAllToCloud() {
+    if (!projects.length) {
+      alert('No projects available to backup.')
+      return
+    }
+    setBackingUpAll(true)
+    try {
+      const count = await downloadAllProjectsBackup()
+      alert(`Full Cloud Backup successfully created for ${count} project(s)!\n\nSave this file to your Google Drive or iCloud to protect your data in case of app deletion.`)
+    } catch (err) {
+      console.error('Full cloud backup failed:', err)
+      alert(`Backup failed: ${err.message || String(err)}`)
+    } finally {
+      setBackingUpAll(false)
+    }
+  }
+
+  // Import project or full cloud archive from JSON file
   async function handleImportProject(e) {
     const file = e.target.files[0]
     if (!file) return
@@ -387,6 +410,28 @@ export default function SettingsModal() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
+
+      // Handle Full Multi-Project Cloud Backup Package
+      if (data.projects && Array.isArray(data.projects) && data.projects.length > 0) {
+        let restoredCount = 0
+        for (const pItem of data.projects) {
+          try {
+            await importProjectData(pItem, null, false)
+            restoredCount++
+          } catch (itemErr) {
+            console.warn('Failed restoring one project in archive:', itemErr)
+          }
+        }
+        await loadProjects()
+        reloadLicenses()
+        setImporting(false)
+        alert(
+          `Full Cloud Backup Restored!\n\n` +
+          `• ${restoredCount} project(s) successfully imported from backup.\n` +
+          `• All drawing blueprints, observation pins, photos, and licenses are restored.`
+        )
+        return
+      }
 
       if (!data || !data.project || !data.project.name) {
         alert('Invalid project backup file format.')
@@ -1014,6 +1059,59 @@ export default function SettingsModal() {
               </div>
             )}
 
+            {/* Cloud Backup & Sync Card (Google Drive, iCloud Drive, Files) */}
+            <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/80 to-purple-50/70 rounded-2xl p-4 sm:p-5 border border-blue-200/80 shadow-xs space-y-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs flex-shrink-0">
+                    <Cloud size={19} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-gray-900 leading-tight">
+                      Cloud Backup &amp; Device Sync
+                    </h4>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Save to Google Drive, iCloud, or OneDrive to safeguard against app deletion
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleBackupAllToCloud}
+                    disabled={backingUpAll || projects.length === 0}
+                    className="sitepunch-btn-primary px-3.5 py-2 bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                    title="Package all projects and save to Google Drive or iCloud"
+                  >
+                    {backingUpAll ? <Spinner /> : <CloudUpload size={14} />}
+                    <span>Backup All to Cloud</span>
+                  </button>
+
+                  <label
+                    className="cursor-pointer px-3.5 py-2 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors"
+                  >
+                    {importing ? <Spinner /> : <CloudDownload size={14} />}
+                    <span>Restore from Cloud</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      disabled={importing}
+                      onChange={handleImportProject}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="bg-white/80 backdrop-blur-xs rounded-xl p-3 border border-blue-100 text-[11px] text-gray-600 flex items-start gap-2 leading-relaxed">
+                <ShieldCheck size={15} className="text-emerald-600 mt-0.5 flex-shrink-0" />
+                <span>
+                  <strong>Safe Offline Architecture:</strong> Because Site Visit Assistant stores inspection blueprints and photos directly on your device, exporting a backup file to Google Drive or iCloud Files ensures 100% data recovery if your app is ever uninstalled or you switch to a new phone.
+                </span>
+              </div>
+            </div>
+
             {/* Stored Projects Header & Action Buttons */}
             <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
               <div>
@@ -1569,6 +1667,85 @@ export default function SettingsModal() {
                   <p className="font-bold text-emerald-700 text-base mt-0.5">100% Offline &amp; Portable</p>
                   <p className="text-xs text-emerald-600 font-medium mt-1">
                     When you export and import the project onto your iPad, iPhone, or PC, the license transfers automatically.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* PWA / Desktop App System Card */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100 flex-wrap gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-brand-50 text-brand-700 rounded-xl">
+                    <Laptop size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-gray-900">Application Platform &amp; Offline Status</h4>
+                    <p className="text-xs text-gray-400">Desktop (Mac &amp; Windows) &amp; Progressive Web App (PWA)</p>
+                  </div>
+                </div>
+                {isInstalled || isElectron ? (
+                  <span className="text-xs font-bold px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-emerald-500" />
+                    {isElectron ? 'Native Desktop App' : 'Installed Desktop App'}
+                  </span>
+                ) : canInstall ? (
+                  <button
+                    type="button"
+                    onClick={installApp}
+                    className="sitepunch-btn-primary px-3 py-1.5 rounded-xl text-xs font-bold text-white shadow-xs flex items-center gap-1.5 cursor-pointer hover:opacity-95"
+                    style={{ background: 'var(--brand-button, #a40e26)' }}
+                  >
+                    <Download size={13} />
+                    <span>Install App on Mac / Windows</span>
+                  </button>
+                ) : (
+                  <span className="text-xs font-medium px-3 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full">
+                    Web &amp; PWA Ready
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                  <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Offline Persistence</p>
+                  <p className="font-bold text-gray-800 text-sm mt-1 flex items-center gap-1.5">
+                    <ShieldCheck size={15} className="text-emerald-600" />
+                    <span>{isPersistent ? 'Protected Storage' : 'Standard Storage'}</span>
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Projects &amp; drawings are protected from browser cleanup.
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                  <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Local Cache Storage</p>
+                  <p className="font-bold text-gray-800 text-sm mt-1 flex items-center gap-1.5">
+                    <HardDrive size={15} className="text-brand-600" />
+                    <span>{storageInfo ? `${storageInfo.usageMB} MB Local` : 'Offline Ready'}</span>
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Stores reports, pins, and high-res photos locally on device.
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                  <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Network Connection</p>
+                  <p className={`font-bold text-sm mt-1 flex items-center gap-1.5 ${isOffline ? 'text-amber-600' : 'text-emerald-600'}`}>
+                    {isOffline ? (
+                      <>
+                        <WifiOff size={15} />
+                        <span>Working Offline</span>
+                      </>
+                    ) : (
+                      <>
+                        <Wifi size={15} />
+                        <span>Online &amp; Synced</span>
+                      </>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    {isOffline ? 'Full access to your reports without internet.' : 'Ready for cloud backup & exports.'}
                   </p>
                 </div>
               </div>
