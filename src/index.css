@@ -77,6 +77,24 @@
   }
 }
 
+/* ── Prevent iOS / Mobile date & time inputs from overflowing container ── */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+}
+input[type="date"]::-webkit-date-and-time-value,
+input[type="time"]::-webkit-date-and-time-value {
+  text-align: left;
+  min-height: 1.4em;
+}
+
 /* ── Apple Liquid Glass Design System ───────────────────────── */
 .liquid-glass-surface {
   background: rgba(255, 255, 255, 0.65) !important;

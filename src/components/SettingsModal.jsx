@@ -562,7 +562,7 @@ export default function SettingsModal() {
 
       {/* Main Content Body */}
       <main
-        className="flex-1 overflow-y-auto p-4 sm:p-6 pb-28"
+        className="flex-1 overflow-y-auto p-4 sm:p-6 pb-20"
         style={{
           paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
@@ -1637,18 +1637,18 @@ export default function SettingsModal() {
       {/* ── Docked Bottom Save Bar for Organization ── */}
       {activeTab === 'general' && (
         <div
-          className="flex-shrink-0 bg-white border-t border-gray-200 p-4 shadow-xl z-20"
+          className="flex-shrink-0 bg-white border-t border-gray-200 px-4 pt-3 pb-3 shadow-xl z-20"
           style={{
-            paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
-            paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
-            paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
+            paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+            paddingLeft: 'max(1rem, env(safe-area-inset-left, 0px))',
+            paddingRight: 'max(1rem, env(safe-area-inset-right, 0px))',
           }}
         >
           <div className="max-w-4xl mx-auto w-full">
             <button
               onClick={handleSave}
               disabled={saving}
-              className="sitepunch-btn-primary w-full bg-brand-700 hover:bg-brand-800 disabled:opacity-60 text-white py-3.5 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2 shadow-md"
+              className="sitepunch-btn-primary w-full bg-brand-700 hover:bg-brand-800 disabled:opacity-60 text-white py-3.5 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2 shadow-md cursor-pointer"
               style={{ background: 'var(--brand-button, #1d4ed8)' }}
             >
               {saved  ? <><Check size={18}/> Saved Successfully!</> :

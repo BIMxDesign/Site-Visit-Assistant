@@ -343,20 +343,20 @@ export default function PhaseModal({ projectUuid, phase, onClose, onSaved }) {
                 <h3 className="text-sm font-bold text-gray-900">Site Visit Details</h3>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field label="Date">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 min-w-0 max-w-full">
+                <Field label="Date" className="min-w-0 max-w-full">
                   <input
                     type="date"
-                    className={INPUT}
+                    className={`${INPUT} min-w-0 max-w-full block`}
                     value={visitDate}
                     onChange={e => setVisitDate(e.target.value)}
                   />
                 </Field>
 
-                <Field label="Time">
+                <Field label="Time" className="min-w-0 max-w-full">
                   <input
                     type="time"
-                    className={INPUT}
+                    className={`${INPUT} min-w-0 max-w-full block`}
                     value={visitTime}
                     onChange={e => setVisitTime(e.target.value)}
                   />

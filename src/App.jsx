@@ -13,6 +13,7 @@ import PDFPreview from './components/PDFPreview'
 import PrivacyModal from './components/PrivacyModal'
 import ConsentBanner from './components/ConsentBanner'
 import AuthModal from './components/AuthModal'
+import { initMobileKeyboardFix } from './utils/keyboard'
 
 export default function App() {
   const {
@@ -63,6 +64,11 @@ export default function App() {
       setPhotoQuality(pq)
     }
     load()
+  }, [])
+
+  // Guarantee mobile text fields never hide behind keyboard
+  useEffect(() => {
+    return initMobileKeyboardFix()
   }, [])
 
   return (

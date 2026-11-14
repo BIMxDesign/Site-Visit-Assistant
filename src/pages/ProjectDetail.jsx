@@ -1075,7 +1075,7 @@ export default function ProjectDetail() {
                     <div className="flex items-center justify-center gap-3 mt-5 flex-wrap">
                       <button
                         onClick={() => handleOpenAddFloorPlan(activePhase.uuid)}
-                        className="sitepunch-btn-primary px-4 py-2.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-2"
+                        className="sitepunch-btn-primary px-4 py-2.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-2 cursor-pointer transition-all"
                         style={{ background: 'var(--brand-button, #a40e26)' }}
                       >
                         <FileImage size={15} />
@@ -1083,7 +1083,8 @@ export default function ProjectDetail() {
                       </button>
                       <button
                         onClick={handleAddNewObservationForPhase}
-                        className="px-4 py-2.5 rounded-xl text-xs font-bold bg-white hover:bg-gray-50 text-gray-800 transition-colors flex items-center gap-2 border border-gray-300 shadow-2xs"
+                        className="sitepunch-btn-primary px-4 py-2.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-2 cursor-pointer transition-all"
+                        style={{ background: 'var(--brand-button, #a40e26)' }}
                       >
                         <Plus size={15} />
                         <span>Add Observation (List Item)</span>
