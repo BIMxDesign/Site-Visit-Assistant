@@ -49,6 +49,7 @@ export default function ProjectDetail() {
     navigateToDashboard, navigateToProjects, navigateToFloorPlan,
     openFloorPlanManager, showFloorPlanManager, closeFloorPlanManager,
     openPDFPreview, openPunchForm, setCurrentPunchItem,
+    currentPunchItemUuid,
     showPunchForm,
     pinColor,
   } = useAppStore()
@@ -116,10 +117,31 @@ export default function ProjectDetail() {
       await resequenceReportPins(currentProjectUuid, activePhaseObj.uuid)
     }
 
-    const [fps, items] = await Promise.all([
+    const [fps, rawItems] = await Promise.all([
       getFloorPlans(currentProjectUuid),
       getPunchItems(currentProjectUuid),
     ])
+
+    // Auto-clean any abandoned blank observations (created without saved notes)
+    const blankItems = rawItems.filter(i => {
+      const hasNotes = i.notes && i.notes.trim().length > 0
+      const isActivelyBeingCreated = showPunchForm && i.uuid === currentPunchItemUuid
+      return !hasNotes && !isActivelyBeingCreated
+    })
+
+    let items = rawItems
+    if (blankItems.length > 0) {
+      for (const b of blankItems) {
+        await db.photos.where('punchItemUuid').equals(b.uuid).delete()
+        await db.punchItems.where('uuid').equals(b.uuid).delete()
+      }
+      if (activePhaseObj) {
+        await resequenceReportPins(currentProjectUuid, activePhaseObj.uuid)
+      } else {
+        await resequenceReportPins({ projectUuid: currentProjectUuid })
+      }
+      items = await getPunchItems(currentProjectUuid)
+    }
 
     setProject(proj)
     setPhases(phaseList)
@@ -806,7 +828,7 @@ export default function ProjectDetail() {
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center gap-2 min-h-[44px]">
+        <div className="flex items-center gap-2 min-h-[44px] max-w-4xl mx-auto w-full">
           <button
             onClick={activePhase ? () => { setCurrentPhase(null); setSearchQuery('') } : overviewTab !== 'sitevisits' ? () => setOverviewTab('sitevisits') : navigateToProjects}
             className="liquid-glass-btn min-w-[40px] min-h-[40px] p-2 -ml-1 rounded-xl text-white transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
@@ -951,8 +973,9 @@ export default function ProjectDetail() {
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        {/* Statistics Banner: Interactive Category Switcher on All Site Visits page */}
-        {!activePhase && (
+        <div className="max-w-4xl mx-auto w-full space-y-4">
+          {/* Statistics Banner: Interactive Category Switcher on All Site Visits page */}
+          {!activePhase && (
           <>
             <div className="liquid-glass-surface rounded-2xl p-2.5 sm:p-3.5 shadow-sm">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
@@ -1950,6 +1973,7 @@ export default function ProjectDetail() {
             )
           )
         )}
+        </div>
       </main>
 
       {/* FAB */}
@@ -1957,7 +1981,7 @@ export default function ProjectDetail() {
         className="fixed z-20"
         style={{
           bottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))',
-          right: 'calc(1.5rem + env(safe-area-inset-right, 0px))',
+          right: 'max(1.5rem, calc((100vw - 56rem) / 2 + 1.5rem + env(safe-area-inset-right, 0px)))',
         }}
       >
         {!activePhase ? (

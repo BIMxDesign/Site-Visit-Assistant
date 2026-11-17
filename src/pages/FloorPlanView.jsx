@@ -45,6 +45,7 @@ export default function FloorPlanView() {
     navigateToFloorPlan,
     openPunchForm,
     setCurrentPunchItem,
+    currentPunchItemUuid,
     showPunchForm,
     openPDFPreview,
     pinColor,
@@ -108,6 +109,22 @@ export default function FloorPlanView() {
       getPhases(currentProjectUuid),
       getProject(currentProjectUuid),
     ])
+
+    // Auto-clean any abandoned blank observations (pins created without saved notes)
+    // to guarantee no blank observation notes or ghost pins form on the key plan
+    const allFpsItems = await getPunchItemsByFloorPlan(currentFloorPlanUuid)
+    const blankItems = allFpsItems.filter(i => {
+      const hasNotes = i.notes && i.notes.trim().length > 0
+      const isActivelyBeingCreated = showPunchForm && i.uuid === currentPunchItemUuid
+      return !hasNotes && !isActivelyBeingCreated
+    })
+
+    if (blankItems.length > 0) {
+      for (const b of blankItems) {
+        await db.photos.where('punchItemUuid').equals(b.uuid).delete()
+        await db.punchItems.where('uuid').equals(b.uuid).delete()
+      }
+    }
 
     // Always maintain continuous sequence across drawings in drawing order
     await resequenceReportPins({
@@ -499,7 +516,8 @@ export default function FloorPlanView() {
 
   // Filtered & sorted observations list
   const filteredItems = useMemo(() => {
-    let list = [...punchItems]
+    // Only observations with saved notes (or actively being created in open modal) form pins on key plan
+    let list = punchItems.filter(i => (i.notes && i.notes.trim().length > 0) || (showPunchForm && i.uuid === currentPunchItemUuid))
 
     if (obsFilter === 'All' || obsFilter === 'Number (1→9)') {
       return list.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
@@ -763,18 +781,19 @@ export default function FloorPlanView() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#111827' }}>
 
       {/* ── Header ── */}
-      <header className="sitepunch-header text-white flex-shrink-0 flex items-center gap-2 shadow-lg z-30" style={{
+      <header className="sitepunch-header text-white flex-shrink-0 shadow-lg z-30" style={{
         paddingTop: 'calc(10px + env(safe-area-inset-top, 0px))',
         paddingBottom: '10px',
         paddingLeft: 'calc(14px + env(safe-area-inset-left, 0px))',
         paddingRight: 'calc(14px + env(safe-area-inset-right, 0px))',
       }}>
-        <button
-          onClick={() => {
-            const reportUuid = floorPlan?.phaseUuid || currentPhaseUuid || (phases.length > 0 ? phases[0].uuid : null)
-            navigateToProject(currentProjectUuid, reportUuid)
-          }}
-          className="liquid-glass-btn p-2 rounded-xl text-white flex items-center justify-center cursor-pointer transition-all"
+        <div className="flex items-center gap-2 max-w-4xl mx-auto w-full">
+          <button
+            onClick={() => {
+              const reportUuid = floorPlan?.phaseUuid || currentPhaseUuid || (phases.length > 0 ? phases[0].uuid : null)
+              navigateToProject(currentProjectUuid, reportUuid)
+            }}
+            className="liquid-glass-btn p-2 rounded-xl text-white flex items-center justify-center cursor-pointer transition-all"
           title="Back to site visit"
         >
           <ArrowLeft size={20} />
@@ -825,16 +844,6 @@ export default function FloorPlanView() {
                     Switch Key Plan
                   </div>
                   <div style={{ maxHeight: 260, overflowY: 'auto' }} className="space-y-1">
-                    {currentPhase && (
-                      <div style={{
-                        padding: '6px 10px', background: '#f1f5f9', borderRadius: 8,
-                        fontSize: 10, fontWeight: 700, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em',
-                        display: 'flex', alignItems: 'center', gap: 6
-                      }}>
-                        <ClipboardList size={12} className="text-brand-600 flex-shrink-0" />
-                        <span className="truncate">{currentPhase.name}</span>
-                      </div>
-                    )}
                     {currentPhaseFps.map(f => (
                       <button
                         key={f.uuid}
@@ -894,29 +903,32 @@ export default function FloorPlanView() {
           <FileText size={14} />
           <span className="hidden sm:inline">Export</span>
         </button>
+        </div>
       </header>
 
       {/* ── Breadcrumb Navigation Path ── */}
       <div className="px-3 py-1.5 bg-slate-900/90 border-b border-slate-800/80 flex-shrink-0 z-20">
-        <Breadcrumbs
-          dark
-          items={[
-            { label: 'Dashboard', icon: <Home size={13} />, onClick: navigateToDashboard },
-            { label: 'Projects', onClick: navigateToProjects },
-            {
-              label: project?.name || 'Project',
-              onClick: () => navigateToProject(currentProjectUuid, null)
-            },
-            {
-              label: currentPhase?.name || 'Site Visit',
-              onClick: () => navigateToProject(currentProjectUuid, currentPhase?.uuid || floorPlan?.phaseUuid)
-            },
-            {
-              label: floorPlan?.name || 'Key Plan',
-              active: true
-            }
-          ]}
-        />
+        <div className="max-w-4xl mx-auto w-full">
+          <Breadcrumbs
+            dark
+            items={[
+              { label: 'Dashboard', icon: <Home size={13} />, onClick: navigateToDashboard },
+              { label: 'Projects', onClick: navigateToProjects },
+              {
+                label: project?.name || 'Project',
+                onClick: () => navigateToProject(currentProjectUuid, null)
+              },
+              {
+                label: currentPhase?.name || 'Site Visit',
+                onClick: () => navigateToProject(currentProjectUuid, currentPhase?.uuid || floorPlan?.phaseUuid)
+              },
+              {
+                label: floorPlan?.name || 'Key Plan',
+                active: true
+              }
+            ]}
+          />
+        </div>
       </div>
 
       {/* ── Main View: Interactive Drawing Canvas OR Structured Observations List ── */}
@@ -1201,8 +1213,9 @@ export default function FloorPlanView() {
         /* ── Punch items structured list view for this drawing ── */
         <div className="flex-1 bg-gray-50 overflow-y-auto flex flex-col">
           {/* Subheader bar with stats, Add Observation, and Filter */}
-          <div className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10 shadow-xs flex items-center justify-between gap-3">
-            <div className="min-w-0">
+          <div className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10 shadow-xs">
+            <div className="max-w-4xl mx-auto w-full flex items-center justify-between gap-3">
+              <div className="min-w-0">
               <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2 truncate">
                 <span className="truncate">{floorPlan?.name || 'Key Plan'} Observations</span>
                 <span
@@ -1301,6 +1314,7 @@ export default function FloorPlanView() {
                   </div>
                 )}
               </div>
+            </div>
             </div>
           </div>
 

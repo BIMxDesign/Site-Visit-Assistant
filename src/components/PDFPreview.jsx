@@ -144,9 +144,12 @@ export default function PDFPreview() {
         getUsers().catch(() => []),
       ])
 
+      // Only observations with saved notes are valid to be included in reports
+      const validItems = its.filter(i => i.notes && i.notes.trim().length > 0)
+
       // Pre-load photos and compute aspect ratios to ensure proportions are preserved
       const pmap = {}
-      for (const item of its) {
+      for (const item of validItems) {
         const pList = await getPhotos(item.uuid)
         for (const p of pList) {
           if (p.imageData) {
@@ -162,7 +165,7 @@ export default function PDFPreview() {
       setProject(proj)
       setPhases(phaseList)
       setFloorPlans(fps)
-      setItems(its)
+      setItems(validItems)
       setPhotosMap(pmap)
       setDbUsers(allUsers || [])
 
@@ -256,6 +259,7 @@ export default function PDFPreview() {
           const pinDataList = []
           itemsToDraw.forEach(item => {
             if (item.pinX == null || item.pinY == null) return
+            if (!item.notes || !item.notes.trim()) return // Ignore any blank observation pins
             const rawX = Number(item.pinX)
             const rawY = Number(item.pinY)
             if (isNaN(rawX) || isNaN(rawY)) return

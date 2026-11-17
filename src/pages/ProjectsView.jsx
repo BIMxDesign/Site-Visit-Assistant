@@ -180,7 +180,7 @@ export default function ProjectsView() {
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center gap-2 min-h-[44px]">
+        <div className="flex items-center gap-2 min-h-[44px] max-w-4xl mx-auto w-full">
           {/* Yellow Box: Back Arrow Button like report page */}
           <button
             onClick={navigateToDashboard}
@@ -275,14 +275,15 @@ export default function ProjectsView() {
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        {loading ? (
-          <div className="flex items-center justify-center h-40">
-            <div className="w-8 h-8 border-4 border-brand-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : (
-          <>
-            {/* Copied Statistics Card */}
-            <div className="liquid-glass-surface rounded-2xl p-3 sm:p-4 shadow-sm">
+        <div className="max-w-4xl mx-auto w-full space-y-4">
+          {loading ? (
+            <div className="flex items-center justify-center h-40">
+              <div className="w-8 h-8 border-4 border-brand-600 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Copied Statistics Card */}
+              <div className="liquid-glass-surface rounded-2xl p-3 sm:p-4 shadow-sm">
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-2.5">
                 <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
                   <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
@@ -388,6 +389,7 @@ export default function ProjectsView() {
             )}
           </>
         )}
+        </div>
       </main>
 
       {/* Floating Action Button */}
@@ -395,7 +397,7 @@ export default function ProjectsView() {
         className="fixed z-20"
         style={{
           bottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))',
-          right: 'calc(1.5rem + env(safe-area-inset-right, 0px))',
+          right: 'max(1.5rem, calc((100vw - 56rem) / 2 + 1.5rem + env(safe-area-inset-right, 0px)))',
         }}
       >
         <button

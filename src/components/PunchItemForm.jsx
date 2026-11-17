@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   X, Camera, Mic, MicOff, Trash2, Image as ImageIcon,
-  Plus, Check, Edit2, AlertCircle, Tag, ArrowLeft, Lock, Copy
+  Plus, Check, Edit2, AlertCircle, Tag, ArrowLeft, Lock, Copy,
+  ChevronLeft, ChevronRight
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -28,13 +29,24 @@ import { preparePhotoForQuality, getStoredPhotoQuality, readFileAsDataUrl } from
 const PRIORITIES = ['Low', 'Medium', 'High', 'Critical']
 
 export default function PunchItemForm() {
-  const { closePunchForm, currentPunchItemUuid, currentPhaseUuid, currentProjectUuid, photoQuality } = useAppStore()
+  const {
+    closePunchForm,
+    currentPunchItemUuid,
+    currentPhaseUuid,
+    currentProjectUuid,
+    currentFloorPlanUuid,
+    setCurrentPunchItem,
+    photoQuality
+  } = useAppStore()
 
   const [item,        setItem]        = useState(null)
   const [photos,      setPhotos]      = useState([])
   const [saving,      setSaving]      = useState(false)
   const [deletingPin, setDeletingPin] = useState(false)
   const [error,       setError]       = useState('')
+
+  // Sibling observations for desktop left/right navigation
+  const [siblings,    setSiblings]    = useState([])
 
   // Report Observation Notes Reuse
   const [reportNotes,       setReportNotes]       = useState([])
@@ -63,6 +75,9 @@ export default function PunchItemForm() {
   const fileInputRef      = useRef(null)
 
   const initialLoadedUuid = useRef(null)
+  const isSavedRef        = useRef(false)
+  const hadNotesInitiallyRef = useRef(false)
+  const itemRef           = useRef(null)
 
   // Cleanup speech recognition on component unmount
   useEffect(() => {
@@ -97,6 +112,9 @@ export default function PunchItemForm() {
     const it = await getPunchItem(currentPunchItemUuid)
     if (!it) return
     setItem(it)
+    itemRef.current = it
+    hadNotesInitiallyRef.current = !!(it.notes && it.notes.trim().length > 0)
+    isSavedRef.current = false
     setForm({
       title:      it.title      || '',
       notes:      it.notes      || '',
@@ -110,7 +128,7 @@ export default function PunchItemForm() {
     setPhotos(ph)
     initialLoadedUuid.current = currentPunchItemUuid
 
-    // Load observation notes from the same report
+    // Load sibling observations and notes from the same report / key plan
     try {
       let pUuid = it.phaseUuid || currentPhaseUuid || null
       let projUuid = it.projectUuid || currentProjectUuid || null
@@ -123,43 +141,139 @@ export default function PunchItemForm() {
         }
       }
 
-      let sameItems = []
-      if (pUuid) {
+      let allSiblings = []
+      if (currentFloorPlanUuid && it.floorPlanUuid === currentFloorPlanUuid) {
+        // Opened from a specific key plan
+        allSiblings = await db.punchItems.where('floorPlanUuid').equals(currentFloorPlanUuid).toArray()
+      } else if (pUuid) {
+        // Belonging to the site visit / report (and any key plans in this visit)
         const phaseFps = await getFloorPlansByPhase(pUuid)
         const fpSet = new Set(phaseFps.map(f => f.uuid))
         if (it.floorPlanUuid) fpSet.add(it.floorPlanUuid)
 
-        let allProjItems = projUuid ? await getPunchItems(projUuid) : await db.punchItems.toArray()
-        sameItems = allProjItems.filter(p => {
-          if (p.uuid === it.uuid) return false
+        const allProjItems = projUuid ? await getPunchItems(projUuid) : await db.punchItems.toArray()
+        allSiblings = allProjItems.filter(p => {
           if (p.phaseUuid && String(p.phaseUuid).trim() === String(pUuid).trim()) return true
           if (p.floorPlanUuid && fpSet.has(p.floorPlanUuid)) return true
           return false
         })
       } else if (it.floorPlanUuid) {
-        const fpItems = await db.punchItems.where('floorPlanUuid').equals(it.floorPlanUuid).toArray()
-        sameItems = fpItems.filter(p => p.uuid !== it.uuid)
+        allSiblings = await db.punchItems.where('floorPlanUuid').equals(it.floorPlanUuid).toArray()
       } else if (projUuid) {
-        const allProjItems = await getPunchItems(projUuid)
-        sameItems = allProjItems.filter(p => p.uuid !== it.uuid)
+        allSiblings = await getPunchItems(projUuid)
+      } else {
+        allSiblings = await db.punchItems.toArray()
       }
 
-      const validNotes = sameItems
-        .filter(p => p.notes && p.notes.trim().length > 0)
-        .sort((a, b) => (Number(a.itemNumber) || 0) - (Number(b.itemNumber) || 0))
+      if (!allSiblings.some(s => s.uuid === it.uuid)) {
+        allSiblings.push(it)
+      }
+
+      // Sort logically by itemNumber (1, 2, 3...) then by createdAt
+      allSiblings.sort((a, b) => {
+        const numA = Number(a.itemNumber)
+        const numB = Number(b.itemNumber)
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
+          return numA - numB
+        }
+        return (a.createdAt || 0) - (b.createdAt || 0)
+      })
+
+      setSiblings(allSiblings)
+
+      const validNotes = allSiblings
+        .filter(p => p.uuid !== it.uuid && p.notes && p.notes.trim().length > 0)
 
       setReportNotes(validNotes)
     } catch (err) {
-      console.error('Failed to load previous report notes:', err)
+      console.error('Failed to load sibling observations:', err)
       setReportNotes([])
+      setSiblings([])
     }
-  }, [currentPunchItemUuid, currentPhaseUuid, currentProjectUuid])
+  }, [currentPunchItemUuid, currentPhaseUuid, currentProjectUuid, currentFloorPlanUuid])
 
   useEffect(() => {
     if (currentPunchItemUuid !== initialLoadedUuid.current) {
       loadInitialData()
     }
   }, [currentPunchItemUuid, loadInitialData])
+
+  // Current position among sibling observations
+  const currentIndex = siblings.findIndex(s => s.uuid === (item?.uuid || currentPunchItemUuid))
+  const hasPrev = currentIndex > 0
+  const hasNext = currentIndex >= 0 && currentIndex < siblings.length - 1
+  const prevItem = hasPrev ? siblings[currentIndex - 1] : null
+  const nextItem = hasNext ? siblings[currentIndex + 1] : null
+
+  // Navigate to another observation on desktop
+  const navigateToSibling = useCallback(async (targetSibling) => {
+    if (!targetSibling || saving || deletingPin) return
+
+    // Stop speech recognition if listening
+    if (listening) {
+      stopVoiceSession()
+    }
+
+    // Auto-save active changes if notes are present
+    if (item && form.notes && form.notes.trim()) {
+      try {
+        await savePunchItem({ ...item, ...form })
+      } catch (err) {
+        console.warn('Auto-saving observation before switching failed:', err)
+      }
+    }
+
+    setError('')
+    setCurrentPunchItem(targetSibling.uuid)
+  }, [saving, deletingPin, listening, item, form, setCurrentPunchItem])
+
+  const handlePrevObservation = useCallback(() => {
+    if (hasPrev && prevItem) {
+      navigateToSibling(prevItem)
+    }
+  }, [hasPrev, prevItem, navigateToSibling])
+
+  const handleNextObservation = useCallback(() => {
+    if (hasNext && nextItem) {
+      navigateToSibling(nextItem)
+    }
+  }, [hasNext, nextItem, navigateToSibling])
+
+  // Desktop keyboard shortcuts: Left / Right arrow navigation (when not typing in form inputs)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const tag = document.activeElement?.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable) {
+        return
+      }
+      if (annotatingPhoto || showTradeManager) return
+
+      if (e.key === 'ArrowLeft' && hasPrev) {
+        e.preventDefault()
+        handlePrevObservation()
+      } else if (e.key === 'ArrowRight' && hasNext) {
+        e.preventDefault()
+        handleNextObservation()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [hasPrev, hasNext, handlePrevObservation, handleNextObservation, annotatingPhoto, showTradeManager])
+
+  // Accessibility & UX: Handle Escape key when annotating photo to return directly to observation edit page
+  useEffect(() => {
+    if (!annotatingPhoto) return
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        setAnnotatingPhoto(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [annotatingPhoto])
 
   const set = (k, v) => {
     setError('')
@@ -277,6 +391,7 @@ export default function PunchItemForm() {
     }
 
     setSaving(true)
+    isSavedRef.current = true
     await savePunchItem({ ...item, ...form })
     setSaving(false)
     closePunchForm()
@@ -290,10 +405,35 @@ export default function PunchItemForm() {
     )
     if (!confirmed) return
     setDeletingPin(true)
+    isSavedRef.current = true
     await deletePunchItem(item.uuid)
     setDeletingPin(false)
     closePunchForm()
   }
+
+  // Cancel and discard unsaved newly dropped pin so no blank pin remains on key plan
+  const handleCancel = async () => {
+    if (item && !hadNotesInitiallyRef.current && !isSavedRef.current) {
+      isSavedRef.current = true
+      try {
+        await deletePunchItem(item.uuid)
+      } catch (err) {
+        console.error('Failed to clean up unsaved blank pin:', err)
+      }
+    }
+    closePunchForm()
+  }
+
+  // Cleanup on unmount: if modal is dismissed or closed without saving notes for a newly placed pin
+  useEffect(() => {
+    return () => {
+      if (itemRef.current && !hadNotesInitiallyRef.current && !isSavedRef.current) {
+        deletePunchItem(itemRef.current.uuid).catch(err => {
+          console.warn('Cleanup of unsaved blank observation pin failed:', err)
+        })
+      }
+    }
+  }, [])
 
   // ── Voice to text (Robust, continuous, multi-platform) ───────────────────
   function appendSpeechToNotes(text) {
@@ -562,7 +702,7 @@ export default function PunchItemForm() {
   }
 
   if (!item) return (
-    <ModalOverlay onClose={closePunchForm}>
+    <ModalOverlay onClose={handleCancel}>
       <div className="bg-white rounded-t-2xl p-8 flex items-center justify-center">
         <Spinner />
       </div>
@@ -572,7 +712,7 @@ export default function PunchItemForm() {
   return (
     <>
       {/* ── Main Punch Item Modal ── */}
-      <ModalOverlay onClose={closePunchForm}>
+      <ModalOverlay onClose={handleCancel}>
         <div className="w-full h-full flex flex-col flex-1 overflow-hidden">
           {/* Header with Delete Pin Action */}
           <header
@@ -589,7 +729,7 @@ export default function PunchItemForm() {
               <div className="flex items-center gap-3 min-w-0">
                 <button
                   type="button"
-                  onClick={closePunchForm}
+                  onClick={handleCancel}
                   className="liquid-glass-btn min-w-[40px] min-h-[40px] p-2 -ml-1 rounded-xl text-white transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
                   aria-label="Back"
                   title="Back"
@@ -605,6 +745,39 @@ export default function PunchItemForm() {
                   </p>
                 </div>
               </div>
+
+              {/* Desktop-only Observation Navigation: strictly hidden on phone view */}
+              {siblings.length > 1 && (
+                <div className="hidden md:flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrevObservation}
+                    disabled={!hasPrev || saving}
+                    className="liquid-glass-btn px-3 py-1.5 rounded-xl text-white transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer disabled:opacity-30 disabled:pointer-events-none hover:bg-white/20 active:scale-95 shadow-sm"
+                    title={hasPrev ? `Previous Observation (#${prevItem?.itemNumber || ''})` : 'First observation'}
+                    aria-label="Previous observation"
+                  >
+                    <ChevronLeft size={16} />
+                    <span>Prev</span>
+                  </button>
+
+                  <div className="px-2.5 py-1 rounded-lg bg-black/20 text-white/90 text-xs font-mono font-medium select-none">
+                    {currentIndex >= 0 ? currentIndex + 1 : 1} of {siblings.length}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleNextObservation}
+                    disabled={!hasNext || saving}
+                    className="liquid-glass-btn px-3 py-1.5 rounded-xl text-white transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer disabled:opacity-30 disabled:pointer-events-none hover:bg-white/20 active:scale-95 shadow-sm"
+                    title={hasNext ? `Next Observation (#${nextItem?.itemNumber || ''})` : 'Last observation'}
+                    aria-label="Next observation"
+                  >
+                    <span>Next</span>
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              )}
             </div>
           </header>
 
@@ -855,8 +1028,8 @@ export default function PunchItemForm() {
               <div className="flex items-center gap-2.5 ml-auto">
                 <button
                   type="button"
-                  onClick={closePunchForm}
-                  className="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold text-xs rounded-xl transition-colors"
+                  onClick={handleCancel}
+                  className="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -872,6 +1045,37 @@ export default function PunchItemForm() {
               </div>
             </div>
           </div>
+
+          {/* Floating Left / Right Navigation Arrows for Desktop view only (strictly hidden on phone view) */}
+          {siblings.length > 1 && (
+            <>
+              {hasPrev && (
+                <button
+                  type="button"
+                  onClick={handlePrevObservation}
+                  disabled={saving}
+                  className="hidden md:flex fixed left-4 lg:left-8 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white text-gray-800 shadow-2xl border border-gray-200 items-center justify-center hover:bg-brand-50 hover:text-brand-700 hover:scale-110 active:scale-95 transition-all z-30 cursor-pointer group"
+                  title={`Previous Observation (#${prevItem?.itemNumber || ''})`}
+                  aria-label="Previous observation"
+                >
+                  <ChevronLeft size={24} className="group-hover:-translate-x-0.5 transition-transform text-gray-700" />
+                </button>
+              )}
+
+              {hasNext && (
+                <button
+                  type="button"
+                  onClick={handleNextObservation}
+                  disabled={saving}
+                  className="hidden md:flex fixed right-4 lg:right-8 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white text-gray-800 shadow-2xl border border-gray-200 items-center justify-center hover:bg-brand-50 hover:text-brand-700 hover:scale-110 active:scale-95 transition-all z-30 cursor-pointer group"
+                  title={`Next Observation (#${nextItem?.itemNumber || ''})`}
+                  aria-label="Next observation"
+                >
+                  <ChevronRight size={24} className="group-hover:translate-x-0.5 transition-transform text-gray-700" />
+                </button>
+              )}
+            </>
+          )}
         </div>
       </ModalOverlay>
 

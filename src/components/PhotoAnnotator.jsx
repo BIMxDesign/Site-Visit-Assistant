@@ -64,6 +64,21 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   useEffect(() => { colorRef.current   = color   }, [color])
   useEffect(() => { strokeWRef.current = strokeW }, [strokeW])
 
+  // Accessibility & UX: Handle Escape key to cancel/exit photo markup mode back to observation edit page
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        onCancel()
+      }
+    }
+    // Listen in capture phase (true) so it intercepts BEFORE App.jsx's global window listener
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [onCancel])
+
   // ── Initialize Fabric Canvas ──────────────────────────────────────────────
   useEffect(() => {
     let disposed = false
