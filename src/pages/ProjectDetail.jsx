@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
-  ArrowLeft, Plus, FileImage, Trash2, ChevronRight,
+  ArrowLeft, Plus, FileImage, Trash2, ChevronRight, ChevronLeft,
   FileText, AlertCircle, CheckCircle, Clock, MoreVertical,
   Download, Share2, Edit2, Filter, Check, ClipboardList,
   ChevronDown, ChevronUp, MapPin, Calendar, CloudSun, Users,
@@ -72,6 +72,7 @@ export default function ProjectDetail() {
   const [overviewTab,   setOverviewTab]   = useState('sitevisits') // 'sitevisits' | 'keyplans' | 'punchitems' | 'images'
   const [galleryPhotos, setGalleryPhotos] = useState([])
   const [previewPhoto,  setPreviewPhoto]  = useState(null)
+  const [previewPhotoIndex, setPreviewPhotoIndex] = useState(null)
 
   const toggleFpAccordion = (fpUuid) => {
     setExpandedFpUuids(prev => {
@@ -197,6 +198,120 @@ export default function ProjectDetail() {
 
     return list
   }, [phases, floorPlans, filter, siteVisitSearchQuery])
+
+  // Flattened array of all photos in current images gallery view for lightbox navigation
+  const displayedGalleryPhotos = useMemo(() => {
+    const list = []
+    filteredPhases.forEach((phase) => {
+      const phaseFps = floorPlans.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && phase === phases[0]))
+      const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
+      const phaseItemUuids = new Set(
+        punchItems
+          .filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
+          .map(i => i.uuid)
+      )
+      const phasePhotos = galleryPhotos.filter(ph => phaseItemUuids.has(ph.punchItemUuid))
+      phasePhotos.forEach(photo => {
+        const item = punchItems.find(i => i.uuid === photo.punchItemUuid)
+        const fp = item ? floorPlans.find(f => f.uuid === item.floorPlanUuid) : null
+        const imgSrc = photo.imageData || photo.dataUrl
+        if (imgSrc) {
+          list.push({ photo, item, phase, floorPlan: fp })
+        }
+      })
+    })
+    return list
+  }, [filteredPhases, floorPlans, punchItems, galleryPhotos, phases])
+
+  // Active photo in lightbox
+  const activePreviewPhoto = useMemo(() => {
+    if (previewPhotoIndex === null) return null
+    if (previewPhotoIndex >= 0 && previewPhotoIndex < displayedGalleryPhotos.length) {
+      return displayedGalleryPhotos[previewPhotoIndex]
+    }
+    return null
+  }, [previewPhotoIndex, displayedGalleryPhotos])
+
+  const handleNextPhoto = useCallback(() => {
+    if (displayedGalleryPhotos.length <= 1) return
+    setPreviewPhotoIndex(prev => {
+      if (prev === null) return 0
+      return (prev + 1) % displayedGalleryPhotos.length
+    })
+  }, [displayedGalleryPhotos.length])
+
+  const handlePrevPhoto = useCallback(() => {
+    if (displayedGalleryPhotos.length <= 1) return
+    setPreviewPhotoIndex(prev => {
+      if (prev === null) return 0
+      return (prev - 1 + displayedGalleryPhotos.length) % displayedGalleryPhotos.length
+    })
+  }, [displayedGalleryPhotos.length])
+
+  const openGalleryPhotoPreview = useCallback((photoToOpen) => {
+    const targetUuid = photoToOpen.photo?.uuid || photoToOpen.photo?.id
+    const idx = displayedGalleryPhotos.findIndex(p => {
+      const pUuid = p.photo?.uuid || p.photo?.id
+      return pUuid && pUuid === targetUuid
+    })
+    if (idx >= 0) {
+      setPreviewPhotoIndex(idx)
+    } else {
+      setPreviewPhotoIndex(0)
+    }
+  }, [displayedGalleryPhotos])
+
+  // Keyboard navigation for photo lightbox (Left/Right arrow, Esc)
+  useEffect(() => {
+    if (previewPhotoIndex === null) return
+    const handleKeyDown = (e) => {
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        handleNextPhoto()
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        handlePrevPhoto()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setPreviewPhotoIndex(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [previewPhotoIndex, handleNextPhoto, handlePrevPhoto])
+
+  // Mobile touch swipe gestures for lightbox
+  const touchStartXRef = useRef(0)
+  const touchStartYRef = useRef(0)
+  const touchEndXRef = useRef(0)
+  const touchEndYRef = useRef(0)
+
+  const handleTouchStart = (e) => {
+    if (!e.touches || e.touches.length === 0) return
+    touchStartXRef.current = e.touches[0].clientX
+    touchStartYRef.current = e.touches[0].clientY
+    touchEndXRef.current = e.touches[0].clientX
+    touchEndYRef.current = e.touches[0].clientY
+  }
+
+  const handleTouchMove = (e) => {
+    if (!e.touches || e.touches.length === 0) return
+    touchEndXRef.current = e.touches[0].clientX
+    touchEndYRef.current = e.touches[0].clientY
+  }
+
+  const handleTouchEnd = () => {
+    const diffX = touchEndXRef.current - touchStartXRef.current
+    const diffY = touchEndYRef.current - touchStartYRef.current
+    // Minimum 35px horizontal swipe, and horizontal swipe is dominant
+    if (Math.abs(diffX) > 35 && Math.abs(diffX) > Math.abs(diffY)) {
+      if (diffX < 0) {
+        handleNextPhoto() // Swiped left -> Next
+      } else {
+        handlePrevPhoto() // Swiped right -> Previous
+      }
+    }
+  }
 
   const handleMoveFloorPlan = async (fpUuid, direction) => {
     const list = [...activePhaseFps]
@@ -1791,7 +1906,7 @@ export default function ProjectDetail() {
                               return (
                                 <div
                                   key={photo.uuid || photo.id}
-                                  onClick={() => setPreviewPhoto({ photo, item, phase, floorPlan: fp })}
+                                  onClick={() => openGalleryPhotoPreview({ photo, item, phase, floorPlan: fp })}
                                   className="relative aspect-square rounded-2xl overflow-hidden cursor-pointer group bg-slate-900/5 border border-white/80 shadow-2xs hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
                                 >
                                   <img
@@ -1983,84 +2098,158 @@ export default function ProjectDetail() {
       )}
 
       {/* ── Photo Preview Lightbox Modal ── */}
-      {previewPhoto && (
+      {activePreviewPhoto && (
         <div
-          className="fixed inset-0 z-[80] bg-black/90 backdrop-blur-md flex flex-col justify-between p-4 sm:p-6 animate-fade-in select-none"
-          onClick={() => setPreviewPhoto(null)}
+          className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex flex-col justify-between overflow-hidden animate-fade-in select-none"
+          style={{
+            paddingTop: 'max(14px, env(safe-area-inset-top, 16px))',
+            paddingBottom: 'max(14px, env(safe-area-inset-bottom, 16px))',
+            paddingLeft: 'max(14px, env(safe-area-inset-left, 16px))',
+            paddingRight: 'max(14px, env(safe-area-inset-right, 16px))',
+          }}
+          onClick={() => setPreviewPhotoIndex(null)}
         >
           {/* Top Header */}
           <div
-            className="flex items-center justify-between max-w-5xl mx-auto w-full text-white pb-3 flex-shrink-0"
+            className="flex items-center justify-between max-w-5xl mx-auto w-full text-white px-2 py-2 flex-shrink-0 z-30 gap-2"
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center gap-3 min-w-0">
-              {previewPhoto.item?.itemNumber && (
+            <div className="flex items-center gap-2.5 min-w-0">
+              {activePreviewPhoto.item?.itemNumber && (
                 <span
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 shadow-sm text-white"
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 shadow-md text-white"
                   style={{ background: pinColor || 'var(--punch-pin-color, #a40e26)' }}
                 >
-                  #{previewPhoto.item.itemNumber}
+                  #{activePreviewPhoto.item.itemNumber}
                 </span>
               )}
               <div className="min-w-0">
                 <h3 className="font-bold text-sm sm:text-base truncate">
-                  {previewPhoto.item?.title || previewPhoto.item?.notes || 'Photo Preview'}
+                  {activePreviewPhoto.item?.title || activePreviewPhoto.item?.notes || 'Photo Preview'}
                 </h3>
-                <p className="text-xs text-white/70 truncate mt-0.5">
-                  {previewPhoto.phase?.name ? `${previewPhoto.phase.name} ` : ''}
-                  {previewPhoto.floorPlan?.name ? `• ${previewPhoto.floorPlan.name}` : ''}
+                <p className="text-[11px] text-white/70 truncate mt-0.5">
+                  {activePreviewPhoto.phase?.name ? `${activePreviewPhoto.phase.name} ` : ''}
+                  {activePreviewPhoto.floorPlan?.name ? `• ${activePreviewPhoto.floorPlan.name}` : ''}
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 flex-shrink-0 ml-3">
-              {previewPhoto.item && (
+            <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+              {displayedGalleryPhotos.length > 1 && (
+                <span className="text-xs font-mono font-bold text-white/80 bg-white/10 px-2.5 py-1 rounded-full whitespace-nowrap">
+                  {previewPhotoIndex + 1} / {displayedGalleryPhotos.length}
+                </span>
+              )}
+              {activePreviewPhoto.item && (
                 <button
                   type="button"
                   onClick={() => {
-                    const itemUuid = previewPhoto.item.uuid
-                    setPreviewPhoto(null)
+                    const itemUuid = activePreviewPhoto.item.uuid
+                    setPreviewPhotoIndex(null)
                     setCurrentPunchItem(itemUuid)
                     openPunchForm()
                   }}
-                  className="px-3.5 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm"
+                  className="px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 active:bg-white/40 text-white text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm"
                 >
-                  <Edit2 size={13} /> Edit Item
+                  <Edit2 size={13} /> <span className="hidden sm:inline">Edit Item</span>
                 </button>
               )}
               <button
                 type="button"
-                onClick={() => setPreviewPhoto(null)}
-                className="p-2 rounded-full hover:bg-white/20 text-white transition-colors cursor-pointer"
+                onClick={() => setPreviewPhotoIndex(null)}
+                className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 active:bg-white/35 text-white flex items-center justify-center transition-all cursor-pointer flex-shrink-0"
                 aria-label="Close photo preview"
-                title="Close"
+                title="Close (Esc)"
               >
                 <X size={20} />
               </button>
             </div>
           </div>
 
-          {/* Center Image Container */}
+          {/* Center Image Container with Desktop Arrows & Mobile Swipe */}
           <div
-            className="flex-1 flex items-center justify-center min-h-0 py-2 w-full"
+            className="flex-1 min-h-0 relative w-full flex items-center justify-center p-2 overflow-hidden"
             onClick={e => e.stopPropagation()}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
           >
+            {/* Desktop Previous Button */}
+            {displayedGalleryPhotos.length > 1 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handlePrevPhoto()
+                }}
+                className="hidden sm:flex absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-black/60 hover:bg-black/90 active:scale-95 text-white backdrop-blur-md items-center justify-center transition-all shadow-xl hover:scale-105 z-20 cursor-pointer border border-white/20"
+                title="Previous photo (Left arrow)"
+                aria-label="Previous photo"
+              >
+                <ChevronLeft size={28} />
+              </button>
+            )}
+
+            {/* Main Observation Photo */}
             <img
-              src={previewPhoto.photo.imageData || previewPhoto.photo.dataUrl}
-              alt={previewPhoto.item?.title || 'Observation photo'}
-              className="max-h-[78vh] max-w-full object-contain rounded-xl shadow-2xl"
+              key={activePreviewPhoto.photo.uuid || activePreviewPhoto.photo.id || previewPhotoIndex}
+              src={activePreviewPhoto.photo.imageData || activePreviewPhoto.photo.dataUrl}
+              alt={activePreviewPhoto.item?.title || 'Observation photo'}
+              className="max-h-full max-w-full object-contain rounded-xl shadow-2xl select-none"
+              draggable={false}
             />
+
+            {/* Desktop Next Button */}
+            {displayedGalleryPhotos.length > 1 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleNextPhoto()
+                }}
+                className="hidden sm:flex absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-black/60 hover:bg-black/90 active:scale-95 text-white backdrop-blur-md items-center justify-center transition-all shadow-xl hover:scale-105 z-20 cursor-pointer border border-white/20"
+                title="Next photo (Right arrow)"
+                aria-label="Next photo"
+              >
+                <ChevronRight size={28} />
+              </button>
+            )}
           </div>
 
-          {/* Bottom Caption / Notes */}
-          {previewPhoto.item?.notes && (
-            <div
-              className="max-w-2xl mx-auto w-full text-center text-white/90 text-xs sm:text-sm bg-black/50 backdrop-blur-md rounded-xl p-3 mt-2 border border-white/10 flex-shrink-0"
-              onClick={e => e.stopPropagation()}
-            >
-              <p className="line-clamp-2">{previewPhoto.item.notes}</p>
-            </div>
-          )}
+          {/* Bottom Caption / Notes & Mobile Touch Navigation */}
+          <div
+            className="max-w-2xl mx-auto w-full text-center text-white/90 text-xs sm:text-sm bg-black/60 backdrop-blur-md rounded-2xl p-3 border border-white/10 flex-shrink-0 z-20 space-y-2"
+            onClick={e => e.stopPropagation()}
+          >
+            {activePreviewPhoto.item?.notes && (
+              <p className="line-clamp-2 leading-relaxed">{activePreviewPhoto.item.notes}</p>
+            )}
+            {displayedGalleryPhotos.length > 1 && (
+              <div className="flex items-center justify-between sm:hidden pt-1 border-t border-white/10 text-xs text-white/90">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handlePrevPhoto()
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 active:bg-white/40 flex items-center gap-1 font-bold cursor-pointer"
+                >
+                  <ChevronLeft size={16} /> Prev
+                </button>
+                <span className="font-mono text-[11px] text-white/60">Swipe left/right</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleNextPhoto()
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 active:bg-white/40 flex items-center gap-1 font-bold cursor-pointer"
+                >
+                  Next <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -252,7 +252,8 @@ export default function PDFPreview() {
           // Pin radius proportioned to image dimensions for crisp readability
           const radius = Math.max(18, Math.round(Math.min(w, h) * 0.02))
 
-          // Draw all pin locations
+          // 1. Gather all valid pins and map to canvas coordinates
+          const pinDataList = []
           itemsToDraw.forEach(item => {
             if (item.pinX == null || item.pinY == null) return
             const rawX = Number(item.pinX)
@@ -272,23 +273,127 @@ export default function PDFPreview() {
               py = rawY * (h / img.naturalHeight)
             }
 
-            // Ensure pin stays fully within canvas boundaries
-            px = Math.max(radius, Math.min(w - radius, px))
-            py = Math.max(radius, Math.min(h - radius, py))
+            // Clamped original coordinates
+            const origX = Math.max(radius, Math.min(w - radius, px))
+            const origY = Math.max(radius, Math.min(h - radius, py))
 
-            // 1. Subtle drop shadow for high contrast on light/dark drawings
+            pinDataList.push({
+              item,
+              origX,
+              origY,
+              x: origX,
+              y: origY,
+              radius,
+              displaced: false,
+            })
+          })
+
+          // 2. Multi-pass Anti-Collision & Separation Engine:
+          // Smoothly repels overlapping pins so all numbers are clear and 100% visible on print
+          const minDist = radius * 2 + 5 // Minimum spacing between pin centers to avoid any badge overlap
+          const iterations = 45
+
+          for (let iter = 0; iter < iterations; iter++) {
+            let moved = false
+            for (let i = 0; i < pinDataList.length; i++) {
+              for (let j = i + 1; j < pinDataList.length; j++) {
+                const p1 = pinDataList[i]
+                const p2 = pinDataList[j]
+
+                let dx = p2.x - p1.x
+                let dy = p2.y - p1.y
+                let dist = Math.hypot(dx, dy)
+
+                if (dist < minDist) {
+                  moved = true
+                  // If pins share the exact same pixel, push in deterministic radial angles
+                  if (dist < 0.001) {
+                    const angle = ((j * 2.39996) + iter * 0.5) // Golden ratio dispersion
+                    dx = Math.cos(angle)
+                    dy = Math.sin(angle)
+                    dist = 1
+                  }
+
+                  const overlap = minDist - dist
+                  const nx = dx / dist
+                  const ny = dy / dist
+                  const half = overlap * 0.5
+
+                  p1.x -= nx * half
+                  p1.y -= ny * half
+                  p2.x += nx * half
+                  p2.y += ny * half
+                }
+              }
+            }
+
+            // Maintain boundaries within canvas margins
+            for (const p of pinDataList) {
+              p.x = Math.max(radius + 2, Math.min(w - radius - 2, p.x))
+              p.y = Math.max(radius + 2, Math.min(h - radius - 2, p.y))
+            }
+
+            if (!moved) break
+          }
+
+          // Mark pins that were visibly displaced from original coordinates
+          pinDataList.forEach(p => {
+            const disp = Math.hypot(p.x - p.origX, p.y - p.origY)
+            p.displaced = disp > radius * 0.35
+          })
+
+          // 3. Pass 1: Draw architectural leader lines and anchor dots for displaced pins
+          pinDataList.forEach(p => {
+            if (!p.displaced) return
+
+            // Outer white casing for leader line (contrasts against both dark and light CAD lines)
+            ctx.beginPath()
+            ctx.moveTo(p.origX, p.origY)
+            ctx.lineTo(p.x, p.y)
+            ctx.strokeStyle = '#ffffff'
+            ctx.lineWidth = Math.max(3, Math.round(radius * 0.16))
+            ctx.lineCap = 'round'
+            ctx.stroke()
+
+            // Main leader line in pin color
+            ctx.beginPath()
+            ctx.moveTo(p.origX, p.origY)
+            ctx.lineTo(p.x, p.y)
+            ctx.strokeStyle = pinColor || '#a40e26'
+            ctx.lineWidth = Math.max(1.5, Math.round(radius * 0.09))
+            ctx.lineCap = 'round'
+            ctx.stroke()
+
+            // True location target anchor dot
+            const anchorR = Math.max(3.5, Math.round(radius * 0.22))
+            ctx.beginPath()
+            ctx.arc(p.origX, p.origY, anchorR + 1.5, 0, Math.PI * 2)
+            ctx.fillStyle = '#ffffff'
+            ctx.fill()
+
+            ctx.beginPath()
+            ctx.arc(p.origX, p.origY, anchorR, 0, Math.PI * 2)
+            ctx.fillStyle = pinColor || '#a40e26'
+            ctx.fill()
+          })
+
+          // 4. Pass 2: Draw all pin circles, borders, and bold numbers
+          pinDataList.forEach(p => {
+            const { x: px, y: py, item } = p
+
+            // Drop shadow for high contrast on light/dark drawings
             ctx.beginPath()
             ctx.arc(px, py + 1.5, radius + 2.5, 0, Math.PI * 2)
             ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'
             ctx.fill()
 
-            // 2. Crisp outer white border
+            // Crisp outer white border
             ctx.beginPath()
             ctx.arc(px, py, radius + 2, 0, Math.PI * 2)
             ctx.fillStyle = '#ffffff'
             ctx.fill()
 
-            // 3. Pin circle
+            // Pin circle in brand/pin color
             ctx.beginPath()
             ctx.arc(px, py, radius, 0, Math.PI * 2)
             ctx.fillStyle = pinColor || '#a40e26'
@@ -297,7 +402,7 @@ export default function PDFPreview() {
             ctx.strokeStyle = '#ffffff'
             ctx.stroke()
 
-            // 4. Centered pin number (bold white)
+            // Centered pin number (bold white)
             ctx.fillStyle = '#ffffff'
             const numStr = String(item.itemNumber || '')
             const fontSize = numStr.length > 2
@@ -1194,11 +1299,16 @@ export default function PDFPreview() {
       for (let dIdx = 0; dIdx < drawingsToRender.length; dIdx++) {
         const fp = drawingsToRender[dIdx]
 
-        // Advance to a clean page for subsequent drawings when key plans are included
-        if (dIdx > 0 && exportFields.keyPlans) {
-          addPageNum()
-          doc.addPage()
-          y = margin
+        // Advance to a clean page:
+        // 1. Always for subsequent drawings when key plans are included
+        // 2. For the first drawing (dIdx === 0) if project metadata occupies the top of page 1,
+        //    giving the key plan architectural drawing a dedicated full-page view without squeezing or cropping
+        if (exportFields.keyPlans) {
+          if (dIdx > 0 || y > margin + 40) {
+            addPageNum()
+            doc.addPage()
+            y = margin
+          }
         }
 
         if (exportFields.keyPlans) {
@@ -1217,38 +1327,54 @@ export default function PDFPreview() {
           const planResult = await renderFloorPlanWithPins(fp, itemsOnFp)
 
           if (planResult && planResult.dataUrl) {
-            // Fit full page width while preserving exact aspect ratio
-            let planW = W - margin * 2
-            let planH = planW / planResult.aspect
+            const titleH = 7 // Title text + spacing
+            const maxAllowedW = W - margin * 2
+            let maxAllowedH = H - margin - y - titleH - 6 // Remaining vertical space with safety buffer
 
-            // If plan height is taller than available vertical space on this page
-            const maxAvailH = H - margin - y - 10
-            if (planH > maxAvailH && planH <= H - margin * 2 - 16) {
-              // Advance to a clean page so key plan can fit to full page width
+            // If remaining space on this page is too tight to display an architectural plan legibly (< 90mm), advance to next page
+            if (maxAllowedH < 90 && y > margin) {
               addPageNum()
               doc.addPage()
               y = margin
-            } else if (planH > H - margin * 2 - 16) {
-              // Plan is extremely tall/vertical; scale down preserving proportion
-              planH = H - margin * 2 - 20
+              maxAllowedH = H - margin - y - titleH - 6
+            }
+
+            // Fit strictly within maxAllowedW x maxAllowedH preserving exact aspect ratio (contain - ZERO CROP)
+            let planW = maxAllowedW
+            let planH = planW / planResult.aspect
+
+            // If height exceeds available vertical space, scale down proportionally by height
+            if (planH > maxAllowedH) {
+              planH = maxAllowedH
               planW = planH * planResult.aspect
             }
+
+            // If width exceeds available horizontal space, scale down proportionally by width
+            if (planW > maxAllowedW) {
+              planW = maxAllowedW
+              planH = planW / planResult.aspect
+            }
+
+            // Horizontally center the key plan within the page margins
+            const planX = margin + Math.max(0, (maxAllowedW - planW) / 2)
 
             // Keyplan Title - Simple Text (Capitalized)
             doc.setFont(pdfFont, 'bold')
             doc.setFontSize(9.5)
             doc.setTextColor(15, 23, 42)
-            doc.text(`KEY PLAN — ${fp.name.toUpperCase()} (PIN LOCATIONS)`, margin, y + 3)
-            y += 6
+            doc.text(`KEY PLAN — ${fp.name.toUpperCase()} (PIN LOCATIONS)`, margin, y + 3.5)
+            y += titleH
 
             try {
-              doc.addImage(planResult.dataUrl, 'JPEG', margin, y, planW, planH, '', 'FAST')
+              doc.addImage(planResult.dataUrl, 'JPEG', planX, y, planW, planH, '', 'FAST')
               doc.setDrawColor(203, 213, 225)
               doc.setLineWidth(0.2)
-              doc.rect(margin, y, planW, planH)
-            } catch {}
+              doc.rect(planX, y, planW, planH)
+            } catch (imgErr) {
+              console.warn('Failed to render key plan image onto PDF:', imgErr)
+            }
 
-            y += planH + 8
+            y += planH + 7
           }
         }
 
@@ -1256,7 +1382,8 @@ export default function PDFPreview() {
         const fpPunchItems = itemsToExport.filter(i => i.floorPlanUuid === fp.uuid)
 
         if (fpPunchItems.length > 0) {
-          if (y > H - margin - 25) {
+          // If remaining vertical space cannot accommodate observations header + first item with photos (~45mm), advance to clean page
+          if (y > H - margin - 45) {
             addPageNum()
             doc.addPage()
             y = margin
