@@ -51,6 +51,7 @@ export default function FloorPlanView() {
     openPDFPreview,
     pinColor,
     pendingPinInstanceObs,
+    setPendingPinInstanceObs,
     clearPendingPinInstanceObs,
   } = useAppStore()
 
@@ -1898,6 +1899,23 @@ export default function FloorPlanView() {
               >
                 <Edit2 size={15} className="text-brand-600 flex-shrink-0" />
                 <span>Edit Observation</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const item = pinContextMenu.pinObj.item
+                  setPinContextMenu(null)
+                  setPendingPinInstanceObs({
+                    obsUuid: item.uuid,
+                    itemNumber: item.itemNumber,
+                    floorPlanUuid: item.floorPlanUuid || currentFloorPlanUuid,
+                  })
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors cursor-pointer text-left"
+              >
+                <Plus size={15} className="text-brand-600 flex-shrink-0" />
+                <span>Duplicate Pin</span>
               </button>
 
               <button

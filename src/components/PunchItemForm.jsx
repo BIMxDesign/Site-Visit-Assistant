@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   X, Camera, Mic, MicOff, Trash2, Image as ImageIcon,
   Plus, Check, Edit2, AlertCircle, Tag, ArrowLeft, Lock, Copy,
-  ChevronLeft, ChevronRight, MapPin
+  ChevronLeft, ChevronRight, MapPin, Search, ChevronDown, ChevronUp,
+  Bold, List, ListOrdered, Clock
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -51,9 +52,22 @@ export default function PunchItemForm() {
   // Sibling observations for desktop left/right navigation
   const [siblings,    setSiblings]    = useState([])
 
-  // Report Observation Notes Reuse
+  // Report Observation Notes Reuse (Searchable Dropdown)
   const [reportNotes,       setReportNotes]       = useState([])
   const [reusedSuccessMsg,  setReusedSuccessMsg]  = useState('')
+  const [reuseSearch,       setReuseSearch]       = useState('')
+  const [showReuseDropdown, setShowReuseDropdown] = useState(false)
+  const reuseDropdownRef = useRef(null)
+
+  // Observation Notes Text Formatting & Always CAPS LOCK
+  const [isCapsLock, setIsCapsLock] = useState(() => {
+    try {
+      return localStorage.getItem('punchapp_notes_caps_lock') === 'true'
+    } catch {
+      return false
+    }
+  })
+  const textareaRef = useRef(null)
 
   // Lists
   const [trades,            setTrades]            = useState([])
@@ -283,21 +297,154 @@ export default function PunchItemForm() {
     setForm(f => ({ ...f, [k]: v }))
   }
 
-  // Reuse previous observation note from the same report
-  const handleReuseNote = (e) => {
-    const selectedUuid = e.target.value
-    if (!selectedUuid) return
-    const found = reportNotes.find(n => n.uuid === selectedUuid)
-    if (!found) return
+  // Close searchable reuse dropdown on click outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (reuseDropdownRef.current && !reuseDropdownRef.current.contains(e.target)) {
+        setShowReuseDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('touchstart', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('touchstart', handleClickOutside)
+    }
+  }, [])
 
-    setForm(prev => ({
-      ...prev,
-      notes: found.notes,
-      trade: (prev.trade === 'General' || !prev.trade) && found.trade ? found.trade : prev.trade,
-      priority: (prev.priority === 'Medium' || !prev.priority) && found.priority ? found.priority : prev.priority,
-    }))
+  // Toggle CAPS LOCK mode (persisted to localStorage)
+  const toggleCapsLock = () => {
+    setIsCapsLock(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem('punchapp_notes_caps_lock', String(next))
+      } catch {}
+      if (next && form.notes) {
+        set('notes', form.notes.toUpperCase())
+      }
+      return next
+    })
+  }
+
+  // Handle typing inside notes textarea with optional always-caps enforcement
+  const handleNotesChange = (e) => {
+    let val = e.target.value
+    if (isCapsLock) {
+      val = val.toUpperCase()
+    }
+    set('notes', val)
+  }
+
+  // Text formatting actions (bold, bullets, numbering, timestamps, case transforms)
+  const applyTextFormatting = (type) => {
+    const el = textareaRef.current
+    const currentNotes = form.notes || ''
+    if (!el) {
+      if (type === 'uppercase') set('notes', currentNotes.toUpperCase())
+      if (type === 'lowercase') set('notes', currentNotes.toLowerCase())
+      if (type === 'sentence') {
+        const sentence = currentNotes.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase())
+        set('notes', sentence)
+      }
+      return
+    }
+
+    const start = el.selectionStart || 0
+    const end = el.selectionEnd || 0
+    const selected = currentNotes.slice(start, end)
+    let replacement = ''
+    let newCursorStart = start
+    let newCursorEnd = end
+
+    if (type === 'uppercase') {
+      const converted = currentNotes.toUpperCase()
+      set('notes', converted)
+      return
+    }
+    if (type === 'lowercase') {
+      const converted = currentNotes.toLowerCase()
+      set('notes', converted)
+      return
+    }
+    if (type === 'sentence') {
+      const sentence = currentNotes.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase())
+      set('notes', sentence)
+      return
+    }
+
+    if (type === 'bold') {
+      if (selected) {
+        replacement = `**${selected}**`
+        newCursorStart = start
+        newCursorEnd = start + replacement.length
+      } else {
+        replacement = `**BOLD TEXT**`
+        newCursorStart = start + 2
+        newCursorEnd = start + 11
+      }
+    } else if (type === 'bullet') {
+      if (selected) {
+        const lines = selected.split('\n')
+        replacement = lines.map(l => l.startsWith('• ') ? l.replace(/^•\s*/, '') : `• ${l}`).join('\n')
+        newCursorStart = start
+        newCursorEnd = start + replacement.length
+      } else {
+        const needsNewline = start > 0 && currentNotes[start - 1] !== '\n' ? '\n' : ''
+        replacement = `${needsNewline}• `
+        newCursorStart = start + replacement.length
+        newCursorEnd = newCursorStart
+      }
+    } else if (type === 'number') {
+      if (selected) {
+        const lines = selected.split('\n')
+        replacement = lines.map((l, i) => `${i + 1}. ${l.replace(/^\d+\.\s*/, '')}`).join('\n')
+        newCursorStart = start
+        newCursorEnd = start + replacement.length
+      } else {
+        const needsNewline = start > 0 && currentNotes[start - 1] !== '\n' ? '\n' : ''
+        replacement = `${needsNewline}1. `
+        newCursorStart = start + replacement.length
+        newCursorEnd = newCursorStart
+      }
+    } else if (type === 'timestamp') {
+      const now = new Date()
+      const stamp = `[${now.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' })} ${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}] `
+      replacement = stamp
+      newCursorStart = start + replacement.length
+      newCursorEnd = newCursorStart
+    }
+
+    let nextText = currentNotes.slice(0, start) + replacement + currentNotes.slice(end)
+    if (isCapsLock) nextText = nextText.toUpperCase()
+    set('notes', nextText)
+
+    setTimeout(() => {
+      if (el) {
+        el.focus()
+        el.setSelectionRange(newCursorStart, newCursorEnd)
+      }
+    }, 0)
+  }
+
+  // Reuse previous observation note: Keep text already inside box and append copied text after that!
+  const handleSelectReuseNote = (found) => {
+    if (!found) return
+    setForm(prev => {
+      const existing = (prev.notes || '').trim()
+      let addition = (found.notes || '').trim()
+      if (isCapsLock) addition = addition.toUpperCase()
+      const merged = existing ? `${existing}\n${addition}` : addition
+      return {
+        ...prev,
+        notes: merged,
+        trade: (prev.trade === 'General' || !prev.trade) && found.trade ? found.trade : prev.trade,
+        priority: (prev.priority === 'Medium' || !prev.priority) && found.priority ? found.priority : prev.priority,
+      }
+    })
     setError('')
-    setReusedSuccessMsg(`Copied note from Observation #${found.itemNumber || ''}`)
+    setShowReuseDropdown(false)
+    setReuseSearch('')
+    setReusedSuccessMsg(`Appended note from Observation #${found.itemNumber || ''}`)
     setTimeout(() => {
       setReusedSuccessMsg('')
     }, 3500)
@@ -448,8 +595,9 @@ export default function PunchItemForm() {
 
   // ── Voice to text (Robust, continuous, multi-platform) ───────────────────
   function appendSpeechToNotes(text) {
-    const clean = (text || '').trim()
+    let clean = (text || '').trim()
     if (!clean) return
+    if (isCapsLock) clean = clean.toUpperCase()
     setForm(prev => {
       const current = (prev.notes || '').trim()
       if (!current) return { ...prev, notes: clean }
@@ -753,6 +901,16 @@ export default function PunchItemForm() {
     itemRef.current = updated
   }
 
+  // Filtered notes for keyword search in reuse notes dropdown
+  const filteredReportNotes = reportNotes.filter(n => {
+    if (!reuseSearch.trim()) return true
+    const q = reuseSearch.toLowerCase().trim()
+    const notesMatch = (n.notes || '').toLowerCase().includes(q)
+    const itemNumMatch = String(n.itemNumber || '').includes(q) || `#${n.itemNumber}`.includes(q)
+    const tradeMatch = (n.trade || '').toLowerCase().includes(q)
+    return notesMatch || itemNumMatch || tradeMatch
+  })
+
   if (!item) return (
     <ModalOverlay onClose={handleCancel}>
       <div className="bg-white rounded-t-2xl p-8 flex items-center justify-center">
@@ -914,32 +1072,128 @@ export default function PunchItemForm() {
                 />
               </div>
 
-            {/* Observation Notes (COMPULSORY FIELD) - Adjustable Multi-line Textbox */}
+            {/* Observation Notes (COMPULSORY FIELD) - Adjustable Multi-line Textbox with Formatting Toolbar */}
             <Field label="Observation Notes" required>
               <div className="relative">
-                <textarea
-                  className={`${INPUT} resize-y min-h-[100px] pr-12 ${
-                    error && !form.notes.trim() ? 'border-red-400 ring-2 ring-red-100' : ''
-                  }`}
-                  rows={4}
-                  placeholder="Enter detailed site observation notes (Compulsory)..."
-                  value={form.notes}
-                  onChange={e => set('notes', e.target.value)}
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={toggleVoice}
-                  className={`absolute right-2.5 top-2.5 p-2 rounded-full transition-all shadow-sm z-10 ${
-                    listening
-                      ? 'bg-red-600 text-white animate-pulse ring-4 ring-red-200'
-                      : 'bg-gray-100 text-gray-600 hover:bg-brand-50 hover:text-brand-700 hover:border-brand-200 border border-gray-200'
-                  }`}
-                  title={listening ? 'Click to stop recording' : 'Voice to text conversion (Dictate notes)'}
-                  aria-label={listening ? 'Stop recording' : 'Start voice to text'}
-                >
-                  {listening ? <MicOff size={18} /> : <Mic size={18} />}
-                </button>
+                {/* Text Formatting & Case Conversion Toolbar */}
+                <div className="bg-gray-50 border border-gray-200 border-b-0 rounded-t-xl px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-1.5 select-none">
+                  <div className="flex flex-wrap items-center gap-1">
+                    {/* Always CAPS LOCK Toggle */}
+                    <button
+                      type="button"
+                      onClick={toggleCapsLock}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
+                        isCapsLock
+                          ? 'bg-brand-600 text-white ring-2 ring-brand-300'
+                          : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-250'
+                      }`}
+                      title={isCapsLock ? 'CAPS LOCK is ON: Everything typed will be in UPPERCASE. Click to toggle OFF.' : 'Click to enable always CAPS LOCK while typing'}
+                    >
+                      <span className="font-mono font-black text-[11px] px-1 py-0.2 bg-black/10 rounded">AA</span>
+                      <span>CAPS LOCK</span>
+                      <span className={`w-2 h-2 rounded-full ${isCapsLock ? 'bg-emerald-300 animate-pulse' : 'bg-gray-300'}`} />
+                    </button>
+
+                    <div className="h-4 w-px bg-gray-300 mx-0.5" />
+
+                    {/* Quick Case Conversions */}
+                    <button
+                      type="button"
+                      onClick={() => applyTextFormatting('uppercase')}
+                      className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-white hover:bg-gray-100 text-gray-700 border border-gray-250 cursor-pointer transition-colors"
+                      title="Convert existing notes to ALL UPPERCASE"
+                    >
+                      UPPER
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyTextFormatting('sentence')}
+                      className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-white hover:bg-gray-100 text-gray-700 border border-gray-250 cursor-pointer transition-colors"
+                      title="Convert existing notes to Sentence case"
+                    >
+                      Sentence
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyTextFormatting('lowercase')}
+                      className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-white hover:bg-gray-100 text-gray-700 border border-gray-250 cursor-pointer transition-colors"
+                      title="Convert existing notes to lowercase"
+                    >
+                      lower
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    {/* Formatting Tools */}
+                    <button
+                      type="button"
+                      onClick={() => applyTextFormatting('bold')}
+                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors"
+                      title="Bold text (**text**)"
+                    >
+                      <Bold size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyTextFormatting('bullet')}
+                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors"
+                      title="Insert bullet point (• )"
+                    >
+                      <List size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyTextFormatting('number')}
+                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors"
+                      title="Insert numbered list (1. )"
+                    >
+                      <ListOrdered size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyTextFormatting('timestamp')}
+                      className="px-2 py-1 rounded-lg text-[11px] font-medium text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer flex items-center gap-1 transition-colors"
+                      title="Insert current date & time stamp"
+                    >
+                      <Clock size={12} />
+                      <span className="hidden sm:inline">Time</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Textarea with live uppercase support and voice input */}
+                <div className="relative">
+                  <textarea
+                    ref={textareaRef}
+                    className={`${INPUT} resize-y min-h-[110px] rounded-t-none pr-12 ${
+                      isCapsLock ? 'uppercase' : ''
+                    } ${
+                      error && !form.notes.trim() ? 'border-red-400 ring-2 ring-red-100' : ''
+                    }`}
+                    rows={4}
+                    placeholder={
+                      isCapsLock
+                        ? 'ENTER DETAILED SITE OBSERVATION NOTES (ALWAYS CAPS LOCK ACTIVE)...'
+                        : 'Enter detailed site observation notes (Compulsory)...'
+                    }
+                    value={form.notes}
+                    onChange={handleNotesChange}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={toggleVoice}
+                    className={`absolute right-2.5 top-2.5 p-2 rounded-full transition-all shadow-sm z-10 ${
+                      listening
+                        ? 'bg-red-600 text-white animate-pulse ring-4 ring-red-200'
+                        : 'bg-gray-100 text-gray-600 hover:bg-brand-50 hover:text-brand-700 hover:border-brand-200 border border-gray-200'
+                    }`}
+                    title={listening ? 'Click to stop recording' : 'Voice to text conversion (Dictate notes)'}
+                    aria-label={listening ? 'Stop recording' : 'Start voice to text'}
+                  >
+                    {listening ? <MicOff size={18} /> : <Mic size={18} />}
+                  </button>
+                </div>
               </div>
 
               {/* Live Listening & Transcription Feedback Banner */}
@@ -966,7 +1220,7 @@ export default function PunchItemForm() {
                     {interimText && (
                       <div className="mt-1.5 p-2 bg-white rounded-lg border border-red-200 text-gray-900 font-medium text-xs shadow-inner">
                         <span className="text-gray-400 mr-1.5 text-[10px] font-sans uppercase">Recognizing:</span>
-                        "{interimText}"
+                        "{isCapsLock ? interimText.toUpperCase() : interimText}"
                       </div>
                     )}
                   </div>
@@ -974,8 +1228,8 @@ export default function PunchItemForm() {
               )}
             </Field>
 
-            {/* Reuse Observation Note from Same Report Dropdown (Green rectangle location) */}
-            <div>
+            {/* Reuse Observation Note from Same Report (Searchable Dropdown & Combobox) */}
+            <div className="relative" ref={reuseDropdownRef}>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
                   <Copy size={13} className="text-brand-600" />
@@ -987,33 +1241,132 @@ export default function PunchItemForm() {
                   </span>
                 )}
               </div>
+
+              {/* Search Box & Dropdown Trigger */}
               <div className="relative">
-                <select
-                  value=""
-                  onChange={handleReuseNote}
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                  <Search size={14} className={reuseSearch ? 'text-brand-600' : 'text-gray-400'} />
+                </div>
+                <input
+                  type="text"
+                  value={reuseSearch}
                   disabled={reportNotes.length === 0}
-                  className={`${INPUT} cursor-pointer bg-white border-brand-200 hover:border-brand-300 focus:border-brand-500 transition-colors text-xs text-gray-700 disabled:opacity-60 disabled:cursor-not-allowed`}
-                  title="Select an observation note from this report to duplicate into this observation"
-                >
-                  <option value="" disabled>
-                    {reportNotes.length === 0
+                  onFocus={() => {
+                    if (reportNotes.length > 0) setShowReuseDropdown(true)
+                  }}
+                  onChange={e => {
+                    setReuseSearch(e.target.value)
+                    setShowReuseDropdown(true)
+                  }}
+                  placeholder={
+                    reportNotes.length === 0
                       ? 'No other observations in this report to reuse'
-                      : '⚡ Select observation note to reuse / duplicate into this pin…'}
-                  </option>
-                  {reportNotes.map(n => {
-                    const cleanNote = (n.notes || '').replace(/\s+/g, ' ').trim()
-                    const preview = cleanNote.length > 80 ? cleanNote.slice(0, 80) + '…' : cleanNote
-                    const tradeBadge = n.trade && n.trade !== 'General' ? ` • ${n.trade}` : ''
-                    return (
-                      <option key={n.uuid} value={n.uuid}>
-                        #{n.itemNumber || '?'}: {preview}{tradeBadge}
-                      </option>
-                    )
-                  })}
-                </select>
+                      : 'Search keywords or click to select note from report…'
+                  }
+                  className={`${INPUT} pl-9 pr-16 bg-white border-brand-200 hover:border-brand-300 focus:border-brand-500 text-xs text-gray-800 disabled:opacity-60 disabled:cursor-not-allowed`}
+                />
+                <div className="absolute inset-y-0 right-0 pr-1.5 flex items-center gap-0.5">
+                  {reuseSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setReuseSearch('')}
+                      className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 cursor-pointer"
+                      title="Clear keyword search"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={reportNotes.length === 0}
+                    onClick={() => {
+                      if (reportNotes.length > 0) {
+                        setShowReuseDropdown(prev => !prev)
+                      }
+                    }}
+                    className="p-1.5 hover:bg-gray-100 rounded text-gray-500 hover:text-gray-700 cursor-pointer disabled:opacity-40"
+                    title="Toggle notes dropdown"
+                  >
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform duration-200 ${showReuseDropdown ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+                </div>
               </div>
+
+              {/* Search Results Dropdown Menu */}
+              {showReuseDropdown && reportNotes.length > 0 && (
+                <div
+                  className="absolute top-full left-0 right-0 mt-1 z-40 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden animate-fade-in"
+                  style={{
+                    maxHeight: '260px',
+                    boxShadow: '0 20px 30px -10px rgba(0, 0, 0, 0.25), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
+                  }}
+                >
+                  <div className="p-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
+                    <span className="font-semibold text-gray-700">
+                      {reuseSearch ? `Found ${filteredReportNotes.length} matching notes` : `All ${reportNotes.length} notes in report`}
+                    </span>
+                    <span className="text-[10px] text-gray-400">
+                      Click note to append to observation
+                    </span>
+                  </div>
+
+                  <div className="overflow-y-auto max-h-[210px] divide-y divide-gray-100">
+                    {filteredReportNotes.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-gray-500">
+                        No notes found matching "{reuseSearch}"
+                      </div>
+                    ) : (
+                      filteredReportNotes.map(n => {
+                        const cleanNote = (n.notes || '').replace(/\s+/g, ' ').trim()
+                        return (
+                          <button
+                            key={n.uuid}
+                            type="button"
+                            onClick={() => handleSelectReuseNote(n)}
+                            className="w-full text-left p-2.5 hover:bg-brand-50/70 transition-colors cursor-pointer group flex items-start gap-2.5"
+                          >
+                            <span
+                              className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 mt-0.5"
+                              style={{ background: pinColor || '#a40e26' }}
+                            >
+                              #{n.itemNumber}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-xs font-bold text-gray-800">
+                                  Observation #{n.itemNumber}
+                                </span>
+                                {n.trade && n.trade !== 'General' && (
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded-full font-medium bg-gray-100 text-gray-600">
+                                    {n.trade}
+                                  </span>
+                                )}
+                                {n.priority && (
+                                  <span className="text-[10px] text-gray-400">
+                                    • {n.priority}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed">
+                                {cleanNote}
+                              </p>
+                            </div>
+                            <span className="text-[10px] font-semibold text-brand-600 bg-brand-50 border border-brand-200 px-2 py-0.5 rounded-lg flex-shrink-0 mt-0.5 group-hover:bg-brand-600 group-hover:text-white transition-colors">
+                              + Append
+                            </span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+
               {reusedSuccessMsg && (
-                <p className="text-xs text-emerald-600 mt-1 font-medium flex items-center gap-1 animate-fade-in">
+                <p className="text-xs text-emerald-600 mt-1.5 font-medium flex items-center gap-1 animate-fade-in">
                   <Check size={13} className="text-emerald-500 flex-shrink-0" />
                   <span>{reusedSuccessMsg}</span>
                 </p>

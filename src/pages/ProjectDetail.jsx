@@ -5,15 +5,17 @@ import {
   Download, Share2, Edit2, Filter, Check, ClipboardList,
   ChevronDown, ChevronUp, MapPin, Calendar, CloudSun, Users,
   GripVertical, Layers, ListOrdered, FolderOpen, Camera, User, Home,
-  Search, X
+  Search, X, Copy
 } from 'lucide-react'
+import { v4 as uuidv4 } from 'uuid'
 import { useAppStore } from '../store/useAppStore'
 import {
   db,
   getProject, saveProject,
-  getFloorPlans, deleteFloorPlan, sortFloorPlans, reorderFloorPlans,
-  getPunchItems, deletePunchItem, resequenceReportPins,
-  ensureProjectPhases, deletePhase
+  getFloorPlans, deleteFloorPlan, sortFloorPlans, reorderFloorPlans, saveFloorPlan,
+  getPunchItems, deletePunchItem, resequenceReportPins, savePunchItem,
+  ensureProjectPhases, deletePhase, savePhase,
+  getPhotos, savePhoto
 } from '../db/database'
 import FloorPlanThumbnail from '../components/FloorPlanThumbnail'
 import FloorPlanManagerModal from '../components/FloorPlanManagerModal'
@@ -771,6 +773,107 @@ export default function ProjectDetail() {
     await load()
   }
 
+  const handleDuplicatePhase = async (phase) => {
+    if (!phase) return
+    const phaseFps = floorPlans.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && phase === phases[0]))
+    const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
+    const phaseItems = punchItems.filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
+
+    const confirmed = window.confirm(
+      `Duplicate Site Visit "${phase.name}"?\n\nThis will create a new site visit with its ${phaseFps.length} key plan(s) and ${phaseItems.length} observation(s).`
+    )
+    if (!confirmed) return
+
+    try {
+      // 1. Generate unique duplicate name
+      let baseName = phase.name.trim()
+      let newName = `${baseName} (Copy)`
+      let counter = 2
+      while (phases.some(p => p.name.trim().toLowerCase() === newName.toLowerCase())) {
+        newName = `${baseName} (Copy ${counter})`
+        counter++
+      }
+
+      // 2. Create new Phase
+      const newPhaseUuid = uuidv4()
+      const newPhase = {
+        ...phase,
+        id: undefined,
+        uuid: newPhaseUuid,
+        projectUuid: currentProjectUuid,
+        name: newName,
+        visitDate: phase.visitDate || new Date().toISOString().slice(0, 10),
+        order: (phases.reduce((max, p) => Math.max(max, p.order || 0), phases.length) || 0) + 1,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+      await savePhase(newPhase)
+
+      // 3. Duplicate Key Plans
+      const fpMap = {}
+      for (const fp of phaseFps) {
+        const newFpUuid = uuidv4()
+        fpMap[fp.uuid] = newFpUuid
+        await saveFloorPlan({
+          ...fp,
+          id: undefined,
+          uuid: newFpUuid,
+          projectUuid: currentProjectUuid,
+          phaseUuid: newPhaseUuid,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      }
+
+      // 4. Duplicate Observations and Photos
+      for (const item of phaseItems) {
+        const newItemUuid = uuidv4()
+        const mappedFpUuid = fpMap[item.floorPlanUuid] || item.floorPlanUuid
+
+        const extraPins = Array.isArray(item.extraPins)
+          ? item.extraPins.map(ep => ({
+              ...ep,
+              id: uuidv4(),
+              floorPlanUuid: fpMap[ep.floorPlanUuid] || mappedFpUuid,
+            }))
+          : []
+
+        await savePunchItem({
+          ...item,
+          id: undefined,
+          uuid: newItemUuid,
+          projectUuid: currentProjectUuid,
+          phaseUuid: newPhaseUuid,
+          floorPlanUuid: mappedFpUuid,
+          extraPins,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+
+        // Copy photos
+        const itemPhotos = await getPhotos(item.uuid)
+        for (const photo of itemPhotos) {
+          await savePhoto({
+            ...photo,
+            id: undefined,
+            uuid: uuidv4(),
+            punchItemUuid: newItemUuid,
+            createdAt: Date.now(),
+          })
+        }
+      }
+
+      // 5. Resequence pins for the new report
+      await resequenceReportPins(currentProjectUuid, newPhaseUuid)
+
+      // 6. Reload project data
+      await load()
+    } catch (err) {
+      console.error('Failed to duplicate site visit:', err)
+      alert(`Could not duplicate site visit: ${err.message || 'Unknown error'}`)
+    }
+  }
+
   if (loading) return <LoadingScreen />
   if (!project) return null
 
@@ -1176,16 +1279,27 @@ export default function ProjectDetail() {
                     </div>
                   </div>
 
-                  {/* Edit button placed outside attendees section on the right side */}
-                  <button
-                    type="button"
-                    onClick={() => setEditingPhase(activePhase)}
-                    className="liquid-pill px-4 py-2.5 sm:py-0 text-slate-700 hover:text-slate-900 rounded-xl transition-all flex sm:flex-col items-center justify-center gap-1.5 flex-shrink-0 sm:self-stretch sm:min-w-[64px] cursor-pointer group shadow-2xs"
-                    title="Edit Site Visit Details"
-                  >
-                    <Edit2 size={15} className="group-hover:scale-110 transition-transform" />
-                    <span className="text-xs font-bold">Edit</span>
-                  </button>
+                  {/* Action buttons (Edit & Duplicate) placed outside attendees section on the right side */}
+                  <div className="flex sm:flex-col items-center gap-1.5 flex-shrink-0 sm:self-stretch">
+                    <button
+                      type="button"
+                      onClick={() => setEditingPhase(activePhase)}
+                      className="liquid-pill px-3 py-2 sm:py-0 text-slate-700 hover:text-slate-900 rounded-xl transition-all flex sm:flex-col items-center justify-center gap-1 flex-1 sm:self-stretch sm:min-w-[64px] cursor-pointer group shadow-2xs"
+                      title="Edit Site Visit Details"
+                    >
+                      <Edit2 size={14} className="group-hover:scale-110 transition-transform" />
+                      <span className="text-[11px] font-bold">Edit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDuplicatePhase(activePhase)}
+                      className="liquid-pill px-3 py-2 sm:py-0 text-slate-700 hover:text-purple-700 rounded-xl transition-all flex sm:flex-col items-center justify-center gap-1 flex-1 sm:self-stretch sm:min-w-[64px] cursor-pointer group shadow-2xs"
+                      title="Duplicate Site Visit"
+                    >
+                      <Copy size={14} className="group-hover:scale-110 transition-transform text-purple-600" />
+                      <span className="text-[11px] font-bold">Duplicate</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1634,6 +1748,17 @@ export default function ProjectDetail() {
                               title="Edit site visit details"
                             >
                               <Edit2 size={15} />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDuplicatePhase(phase)
+                              }}
+                              className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-purple-700 flex items-center justify-center cursor-pointer transition-colors"
+                              aria-label="Duplicate site visit"
+                              title="Duplicate site visit"
+                            >
+                              <Copy size={15} />
                             </button>
                             <button
                               onClick={(e) => {
