@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react'
 import { useAppStore } from './store/useAppStore'
-import { getSetting, setSetting } from './db/database'
+import { getSetting, setSetting, getAllProjectsBackupBlob } from './db/database'
 import { DEFAULT_THEME_COLOR, DEFAULT_PIN_COLOR } from './utils/theme'
 import Dashboard from './pages/Dashboard'
 import ProjectsView from './pages/ProjectsView'
@@ -14,6 +14,8 @@ import PrivacyModal from './components/PrivacyModal'
 import ConsentBanner from './components/ConsentBanner'
 import AuthModal from './components/AuthModal'
 import { initMobileKeyboardFix } from './utils/keyboard'
+import { initFirebase, subscribeToAuthChanges, isFirebaseConfigured } from './services/firebase'
+import { checkAndRunPeriodicBackup } from './utils/cloudFolder'
 
 export default function App() {
   const {
@@ -30,6 +32,7 @@ export default function App() {
     closeSettings,
     closePDFPreview,
     closePrivacyModal,
+    setCurrentUser,
     setCompanyName,
     setCompanyLogo,
     setThemeColor,
@@ -74,6 +77,52 @@ export default function App() {
   // Guarantee mobile text fields never hide behind keyboard
   useEffect(() => {
     return initMobileKeyboardFix()
+  }, [])
+
+  // Firebase Auth sync on startup
+  useEffect(() => {
+    if (isFirebaseConfigured()) {
+      initFirebase()
+      const unsubscribe = subscribeToAuthChanges((firebaseUser) => {
+        if (firebaseUser) {
+          setCurrentUser({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            name: firebaseUser.displayName || '',
+          })
+        }
+      })
+      return () => {
+        if (typeof unsubscribe === 'function') unsubscribe()
+      }
+    }
+  }, [setCurrentUser])
+
+  // Automatic Periodic Cloud Backup Background Runner (Daily, Weekly, Monthly)
+  useEffect(() => {
+    let intervalId = null
+
+    const runCheck = async () => {
+      try {
+        await checkAndRunPeriodicBackup(getAllProjectsBackupBlob)
+      } catch {}
+    }
+
+    // Run check shortly after app startup (3s delay so initial DB load completes)
+    const initialTimer = setTimeout(runCheck, 3000)
+
+    // Check periodically every 10 minutes while the app is active
+    intervalId = setInterval(runCheck, 10 * 60 * 1000)
+
+    // Check when user returns to tab / window
+    const handleFocus = () => runCheck()
+    window.addEventListener('focus', handleFocus)
+
+    return () => {
+      clearTimeout(initialTimer)
+      if (intervalId) clearInterval(intervalId)
+      window.removeEventListener('focus', handleFocus)
+    }
   }, [])
 
   // Desktop keyboard shortcuts: Escape to dismiss top-level modal

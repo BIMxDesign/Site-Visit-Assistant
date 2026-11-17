@@ -2,6 +2,7 @@ import Dexie from 'dexie'
 import { v4 as uuidv4 } from 'uuid'
 import { getProjectLicense, importAndPreserveLicenses } from '../services/licenseService'
 import { isObservationOpenStatus } from '../utils/formatters'
+import { saveBackupToCloud } from '../utils/cloudFolder'
 
 export const db = new Dexie('PunchListDB')
 
@@ -806,7 +807,8 @@ export async function exportProjectData(projectUuid) {
 }
 
 /**
- * Export a full project (including license records and photos) and trigger a JSON backup download or Native Cloud Share (Google Drive / iCloud).
+ * Export a full project (including license records and photos) directly to connected OneDrive / Google Drive folder,
+ * native file picker, or fallback download.
  */
 export async function downloadProjectBackup(project) {
   if (!project?.uuid) throw new Error('Missing project identifier for backup export.')
@@ -815,40 +817,7 @@ export async function downloadProjectBackup(project) {
   const sanitized = (project.name || 'project').replace(/[^a-z0-9_-]/gi, '_')
   const filename = `${sanitized}-backup-${new Date().toISOString().slice(0, 10)}.json`
 
-  // 1. On mobile devices, offer Native Share (Save to Google Drive, iCloud Files, AirDrop, etc.)
-  if (typeof navigator !== 'undefined' && navigator.canShare && typeof File !== 'undefined') {
-    try {
-      const file = new File([blob], filename, { type: 'application/json' })
-      if (navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: `Project Backup: ${project.name}`,
-          text: `Site Visit Assistant backup file for ${project.name}`
-        })
-        logExport({
-          projectUuid: project.uuid,
-          projectName: project.name || '',
-          type: 'project',
-          reportName: 'Full Project Backup (.json)',
-          filename: filename,
-          pageCount: null,
-        }).catch(() => {})
-        return
-      }
-    } catch (shareErr) {
-      if (shareErr.name === 'AbortError') return
-    }
-  }
-
-  // 2. Fallback to direct browser download
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  const result = await saveBackupToCloud(blob, filename)
 
   // Log project data backup export
   logExport({
@@ -859,13 +828,14 @@ export async function downloadProjectBackup(project) {
     filename: filename,
     pageCount: null,
   }).catch(() => {})
+
+  return result
 }
 
 /**
- * Exports all projects, key plans, observations, photos, and licenses into a single archive
- * and triggers cloud share (Google Drive, iCloud Files) or direct download.
+ * Packages all projects, key plans, observations, photos, and licenses into a JSON blob.
  */
-export async function downloadAllProjectsBackup() {
+export async function getAllProjectsBackupBlob(filenamePrefix = 'site-visit-assistant-ALL-PROJECTS-backup') {
   const allProjects = await getAllProjects()
   if (!allProjects || allProjects.length === 0) {
     throw new Error('No projects found to backup.')
@@ -885,33 +855,27 @@ export async function downloadAllProjectsBackup() {
   }
 
   const blob = new Blob([JSON.stringify(backupPackage, null, 2)], { type: 'application/json' })
-  const filename = `site-visit-assistant-ALL-PROJECTS-backup-${new Date().toISOString().slice(0, 10)}.json`
+  const filename = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.json`
 
-  if (typeof navigator !== 'undefined' && navigator.canShare && typeof File !== 'undefined') {
-    try {
-      const file = new File([blob], filename, { type: 'application/json' })
-      if (navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: 'Site Visit Assistant - All Projects Cloud Backup',
-          text: `Full cloud backup of all ${allProjects.length} projects from Site Visit Assistant`
-        })
-        return allProjects.length
-      }
-    } catch (shareErr) {
-      if (shareErr.name === 'AbortError') return allProjects.length
-    }
+  return {
+    blob,
+    filename,
+    count: allProjects.length,
+    backupPackage,
   }
+}
 
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-  return allProjects.length
+/**
+ * Exports all projects, key plans, observations, photos, and licenses into a single archive
+ * directly to connected OneDrive / Google Drive folder, native file picker, or fallback download.
+ */
+export async function downloadAllProjectsBackup() {
+  const { blob, filename, count } = await getAllProjectsBackupBlob()
+  const result = await saveBackupToCloud(blob, filename)
+  return {
+    count,
+    ...result,
+  }
 }
 export async function importProjectData(data, targetUserEmail = null, asNewCopy = false) {
   if (!data || typeof data !== 'object') {

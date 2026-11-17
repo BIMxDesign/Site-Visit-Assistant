@@ -3,16 +3,35 @@ import {
   ArrowLeft, Upload, Trash2, Check, Image as ImageIcon,
   AlertTriangle, Edit2, Info, Key, ShieldCheck, CheckCircle2,
   Smartphone, Palette, Type, Download, Shield, Plus, Lock, MapPin, Building2,
-  User, LogOut, Calendar, Folder, FolderOpen, ClipboardList, AlertCircle, FileText,
+  User, LogOut, Calendar, Clock, Folder, FolderOpen, ClipboardList, AlertCircle, FileText,
   ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy, Sparkles, X, Camera,
   ScrollText, FileDown, Archive, FileSpreadsheet, ChevronRight, Package,
-  Cloud, CloudUpload, CloudDownload, Share2, Laptop, HardDrive, Wifi, WifiOff
+  Cloud, CloudUpload, CloudDownload, Share2, Laptop, HardDrive, Wifi, WifiOff,
+  Flame, Zap, Globe, Database
 } from 'lucide-react'
 import { usePwa } from '../utils/pwa'
+import {
+  getFirebaseConfig,
+  saveFirebaseConfig,
+  isFirebaseConfigured,
+  initFirebase,
+  syncProjectToCloud,
+} from '../services/firebase'
+import {
+  selectCloudSyncFolder,
+  getConnectedCloudFolder,
+  disconnectCloudFolder,
+  isFileSystemAccessSupported,
+  AUTO_BACKUP_FREQUENCIES,
+  getAutoBackupConfig,
+  setAutoBackupFrequency,
+  executePeriodicAutoBackup,
+  requestCloudFolderPermission,
+} from '../utils/cloudFolder'
 import { useAppStore } from '../store/useAppStore'
 import {
   db, getSetting, setSetting, getAllProjects, deleteProject,
-  downloadProjectBackup, downloadAllProjectsBackup, importProjectData, updateUserProfile,
+  downloadProjectBackup, downloadAllProjectsBackup, getAllProjectsBackupBlob, importProjectData, updateUserProfile,
   getExportLogs, getAllExportLogSummaries, getAllExportLogsFlat,
 } from '../db/database'
 import { Field, INPUT, Spinner } from './NewProjectModal'
@@ -89,6 +108,138 @@ export default function SettingsModal() {
   const [copiedKeyUuid, setCopiedKeyUuid] = useState(null)
   const [showImportNotes, setShowImportNotes] = useState(true)
   const { canInstall, isInstalled, isOffline, isElectron, isPersistent, storageInfo, installApp } = usePwa()
+
+  // Native Cloud Folder Connection (OneDrive / Google Drive / iCloud)
+  const [cloudFolder, setCloudFolder] = useState(null)
+  const [connectingCloudFolder, setConnectingCloudFolder] = useState(false)
+
+  useEffect(() => {
+    getConnectedCloudFolder().then(setCloudFolder)
+  }, [])
+
+  async function handleConnectCloudFolder() {
+    setConnectingCloudFolder(true)
+    try {
+      const selected = await selectCloudSyncFolder()
+      if (selected) {
+        setCloudFolder(selected)
+      }
+    } catch (err) {
+      alert(`Folder connection failed: ${err.message}`)
+    } finally {
+      setConnectingCloudFolder(false)
+    }
+  }
+
+  async function handleDisconnectCloudFolder() {
+    await disconnectCloudFolder()
+    setCloudFolder(null)
+  }
+
+  // Firebase Live Sync Configuration state
+  const [showFirebaseModal, setShowFirebaseModal] = useState(false)
+  const [fbConfig, setFbConfig] = useState(() => getFirebaseConfig())
+  const [fbApiKey, setFbApiKey] = useState(() => getFirebaseConfig()?.apiKey || '')
+  const [fbProjectId, setFbProjectId] = useState(() => getFirebaseConfig()?.projectId || '')
+  const [fbStorageBucket, setFbStorageBucket] = useState(() => getFirebaseConfig()?.storageBucket || '')
+  const [fbRawJson, setFbRawJson] = useState('')
+  const [fbSyncing, setFbSyncing] = useState(false)
+  const [fbSyncMsg, setFbSyncMsg] = useState('')
+  const [fbSyncError, setFbSyncError] = useState('')
+
+  async function handleSaveFirebaseConfig(e) {
+    if (e) e.preventDefault()
+    setFbSyncError('')
+    setFbSyncMsg('')
+
+    let finalConfig = null
+    if (fbRawJson.trim()) {
+      try {
+        let cleaned = fbRawJson.trim()
+        if (cleaned.includes('{') && cleaned.includes('}')) {
+          cleaned = cleaned.substring(cleaned.indexOf('{'), cleaned.lastIndexOf('}') + 1)
+        }
+        cleaned = cleaned.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":').replace(/'/g, '"')
+        finalConfig = JSON.parse(cleaned)
+      } catch {
+        setFbSyncError('Could not parse the pasted JSON snippet. Please check formatting or fill in the API Key and Project ID fields directly.')
+        return
+      }
+    } else {
+      if (!fbApiKey.trim() || !fbProjectId.trim()) {
+        setFbSyncError('Please provide at least the Firebase API Key and Project ID.')
+        return
+      }
+      finalConfig = {
+        apiKey: fbApiKey.trim(),
+        projectId: fbProjectId.trim(),
+        authDomain: `${fbProjectId.trim()}.firebaseapp.com`,
+        storageBucket: fbStorageBucket.trim() || `${fbProjectId.trim()}.appspot.com`,
+      }
+    }
+
+    try {
+      saveFirebaseConfig(finalConfig)
+      setFbConfig(finalConfig)
+      initFirebase()
+      setFbSyncMsg('Firebase configuration saved successfully! Cloud sync is now active.')
+      setShowFirebaseModal(false)
+    } catch (err) {
+      setFbSyncError(`Failed to initialize Firebase: ${err.message}`)
+    }
+  }
+
+  async function handleDisconnectFirebase() {
+    if (!window.confirm('Disconnect Firebase cloud sync? Your local data will remain safe on this device.')) return
+    saveFirebaseConfig(null)
+    setFbConfig(null)
+    setFbApiKey('')
+    setFbProjectId('')
+    setFbStorageBucket('')
+    setFbRawJson('')
+    setFbSyncMsg('Firebase disconnected.')
+    setTimeout(() => setFbSyncMsg(''), 3000)
+  }
+
+  async function handleSyncAllProjectsToFirebase() {
+    if (!isFirebaseConfigured()) {
+      setShowFirebaseModal(true)
+      return
+    }
+    setFbSyncing(true)
+    setFbSyncMsg('')
+    setFbSyncError('')
+    try {
+      const allProjects = await getAllProjects()
+      const [allPhases, allFps, allItems] = await Promise.all([
+        db.phases.toArray(),
+        db.floorPlans.toArray(),
+        db.punchItems.toArray(),
+      ])
+
+      let syncedCount = 0
+      for (const proj of allProjects) {
+        const projPhases = allPhases.filter(ph => ph.projectUuid === proj.uuid)
+        const projFps = allFps.filter(fp => fp.projectUuid === proj.uuid)
+        const projFpUuids = new Set(projFps.map(f => f.uuid))
+        const projItems = allItems.filter(it => it.projectUuid === proj.uuid || projFpUuids.has(it.floorPlanUuid))
+
+        await syncProjectToCloud(proj, {
+          phases: projPhases,
+          floorPlans: projFps,
+          punchItems: projItems,
+        })
+        syncedCount++
+      }
+
+      setFbSyncMsg(`Successfully synced ${syncedCount} project(s) to Firebase Cloud!`)
+      setTimeout(() => setFbSyncMsg(''), 4000)
+    } catch (err) {
+      setFbSyncError(`Sync notice: ${err.message || 'Make sure your Firebase project is active.'}`)
+    } finally {
+      setFbSyncing(false)
+    }
+  }
   const [editingProject, setEditingProject] = useState(null)
   const [activeTab,     setActiveTab]     = useState(settingsTab || 'general') // 'general' | 'projects' | 'logs' | 'about'
   const [activatingProject, setActivatingProject] = useState(null)
@@ -391,8 +542,15 @@ export default function SettingsModal() {
     }
     setBackingUpAll(true)
     try {
-      const count = await downloadAllProjectsBackup()
-      alert(`Full Cloud Backup successfully created for ${count} project(s)!\n\nSave this file to your Google Drive or iCloud to protect your data in case of app deletion.`)
+      const res = await downloadAllProjectsBackup()
+      if (res?.aborted) return
+      if (res?.method === 'direct-folder') {
+        alert(`✅ Full Cloud Backup successfully saved directly into your "${res.folderName}" folder!\n\nOneDrive / Google Drive will automatically sync it to the cloud.`)
+      } else if (res?.method === 'save-picker') {
+        alert(`✅ Full Cloud Backup successfully saved directly into your selected folder!`)
+      } else {
+        alert(`Full Cloud Backup successfully exported for ${res?.count || projects.length} project(s)!\n\nSaved to your selected location to safeguard your data.`)
+      }
     } catch (err) {
       console.error('Full cloud backup failed:', err)
       alert(`Backup failed: ${err.message || String(err)}`)
@@ -1082,7 +1240,7 @@ export default function SettingsModal() {
                     onClick={handleBackupAllToCloud}
                     disabled={backingUpAll || projects.length === 0}
                     className="sitepunch-btn-primary px-3.5 py-2 bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
-                    title="Package all projects and save to Google Drive or iCloud"
+                    title="Package all projects and save directly into your OneDrive or Google Drive folder"
                   >
                     {backingUpAll ? <Spinner /> : <CloudUpload size={14} />}
                     <span>Backup All to Cloud</span>
@@ -1104,10 +1262,144 @@ export default function SettingsModal() {
                 </div>
               </div>
 
+              {/* Direct OneDrive / Google Drive Folder Connection */}
+              {isFileSystemAccessSupported() && (
+                cloudFolder ? (
+                  <div className="bg-white/90 backdrop-blur-xs border border-emerald-300 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap shadow-2xs">
+                    <div className="flex items-center gap-2 text-xs text-emerald-950 font-semibold min-w-0">
+                      <FolderOpen size={16} className="text-emerald-600 flex-shrink-0" />
+                      <span className="truncate">Connected Cloud Folder: <strong className="font-bold underline text-emerald-800">{cloudFolder.name}</strong></span>
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold flex-shrink-0">Direct Sync Active</span>
+                    </div>
+                    <div className="flex items-center gap-2.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={handleConnectCloudFolder}
+                        className="text-emerald-800 hover:text-emerald-950 font-semibold underline cursor-pointer"
+                      >
+                        Change
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDisconnectCloudFolder}
+                        className="text-red-600 hover:text-red-800 font-semibold underline cursor-pointer"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white/80 backdrop-blur-xs border border-blue-200 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap shadow-2xs">
+                    <div className="flex items-center gap-2 text-xs text-gray-700 min-w-0">
+                      <Folder size={16} className="text-blue-600 flex-shrink-0" />
+                      <div>
+                        <p className="font-bold text-gray-900 leading-tight">Connect OneDrive or Google Drive Folder</p>
+                        <p className="text-[11px] text-gray-500 mt-0.5">Select your OneDrive or Google Drive folder once; backups will write directly into it.</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleConnectCloudFolder}
+                      disabled={connectingCloudFolder}
+                      className="px-3.5 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-xl text-xs font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5"
+                    >
+                      {connectingCloudFolder ? <Spinner /> : <FolderOpen size={13} />}
+                      <span>Select Folder</span>
+                    </button>
+                  </div>
+                )
+              )}
+
               <div className="bg-white/80 backdrop-blur-xs rounded-xl p-3 border border-blue-100 text-[11px] text-gray-600 flex items-start gap-2 leading-relaxed">
                 <ShieldCheck size={15} className="text-emerald-600 mt-0.5 flex-shrink-0" />
                 <span>
-                  <strong>Safe Offline Architecture:</strong> Because Site Visit Assistant stores inspection blueprints and photos directly on your device, exporting a backup file to Google Drive or iCloud Files ensures 100% data recovery if your app is ever uninstalled or you switch to a new phone.
+                  <strong>Safe Offline Architecture:</strong> Because Site Visit Assistant stores inspection blueprints and photos directly on your device, exporting a backup file to Google Drive, OneDrive, or iCloud ensures 100% data recovery if your app is ever uninstalled.
+                </span>
+              </div>
+            </div>
+
+            {/* Firebase Live Cloud Sync Card (Realtime 2-Way Sync across Phone & Desktop) */}
+            <div className="bg-gradient-to-r from-amber-50/90 via-orange-50/80 to-amber-50/70 rounded-2xl p-4 sm:p-5 border border-amber-200/80 shadow-xs space-y-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-600 text-white flex items-center justify-center shadow-xs flex-shrink-0">
+                    <Flame size={20} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-gray-900 leading-tight">
+                        Firebase Realtime Cloud Sync
+                      </h4>
+                      {isFirebaseConfigured() ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full flex items-center gap-1">
+                          <CheckCircle2 size={11} className="text-emerald-600" />
+                          Connected • 5 GB Quota
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-medium px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-200 rounded-full">
+                          5 GB Free Cloud Available
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Live two-way sync between your Phone, Tablet, and Desktop PC with 5 GB free storage
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {isFirebaseConfigured() ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleSyncAllProjectsToFirebase}
+                        disabled={fbSyncing || projects.length === 0}
+                        className="sitepunch-btn-primary px-3.5 py-2 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                        title="Synchronize all local projects and blueprints to Firebase Cloud"
+                      >
+                        {fbSyncing ? <Spinner /> : <RefreshCw size={13} className={fbSyncing ? 'animate-spin' : ''} />}
+                        <span>Sync Projects to Cloud</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowFirebaseModal(true)}
+                        className="px-3 py-2 bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 rounded-xl text-xs font-medium shadow-2xs transition-colors cursor-pointer"
+                        title="Manage Firebase project keys"
+                      >
+                        Configure
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowFirebaseModal(true)}
+                      className="sitepunch-btn-primary px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Zap size={14} />
+                      <span>Connect Firebase Project</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {fbSyncMsg && (
+                <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl font-medium flex items-center gap-2 animate-fade-in">
+                  <CheckCircle size={14} className="text-emerald-600 flex-shrink-0" />
+                  <span>{fbSyncMsg}</span>
+                </div>
+              )}
+
+              {fbSyncError && (
+                <div className="p-2.5 bg-red-50 border border-red-200 text-red-800 text-xs rounded-xl font-medium flex items-center gap-2 animate-fade-in">
+                  <AlertCircle size={14} className="text-red-600 flex-shrink-0" />
+                  <span>{fbSyncError}</span>
+                </div>
+              )}
+
+              <div className="bg-white/80 backdrop-blur-xs rounded-xl p-3 border border-amber-100 text-[11px] text-gray-600 flex items-start gap-2 leading-relaxed">
+                <Flame size={15} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                <span>
+                  <strong>Automatic Two-Way Synchronization:</strong> Once connected, changes you make on-site are automatically uploaded, and your office desktop PC updates automatically in real-time. Includes 5 GB free photo storage with zero monthly fees.
                 </span>
               </div>
             </div>
@@ -1939,6 +2231,134 @@ export default function SettingsModal() {
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Firebase Setup & Connection Modal */}
+      {showFirebaseModal && (
+        <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden border border-gray-100 slide-up max-h-[90vh] flex flex-col">
+            <div className="p-5 text-white bg-amber-600 flex items-start justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center mb-2 shadow-xs">
+                  <Flame size={22} className="text-white" />
+                </div>
+                <h3 className="font-bold text-base leading-tight">
+                  Connect Free Firebase Project
+                </h3>
+                <p className="text-xs text-amber-100 mt-1">
+                  Enables live multi-device two-way sync with 5 GB free cloud storage
+                </p>
+              </div>
+              <button
+                onClick={() => setShowFirebaseModal(false)}
+                className="p-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-full cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveFirebaseConfig} className="p-5 overflow-y-auto space-y-4 text-xs">
+              {fbSyncError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl font-medium">
+                  {fbSyncError}
+                </div>
+              )}
+
+              <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-200 text-[11px] text-amber-900 space-y-1">
+                <p className="font-bold flex items-center gap-1.5">
+                  <Info size={13} className="text-amber-700" />
+                  How to get your free credentials in 2 minutes:
+                </p>
+                <ol className="list-decimal list-inside space-y-0.5 text-gray-700 ml-1">
+                  <li>Go to <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="text-amber-800 font-bold underline">console.firebase.google.com</a> and click <em>Create Project</em>.</li>
+                  <li>Click the Web icon (<strong>&lt;/&gt;</strong>) in your project to register an app.</li>
+                  <li>Copy and paste the configuration keys or JSON snippet below.</li>
+                </ol>
+              </div>
+
+              <div>
+                <label className="font-bold text-gray-700 uppercase tracking-wide block mb-1">
+                  Firebase API Key *
+                </label>
+                <input
+                  type="text"
+                  value={fbApiKey}
+                  onChange={e => setFbApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-gray-50/50 font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-gray-700 uppercase tracking-wide block mb-1">
+                    Project ID *
+                  </label>
+                  <input
+                    type="text"
+                    value={fbProjectId}
+                    onChange={e => setFbProjectId(e.target.value)}
+                    placeholder="my-site-project-123"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-gray-50/50 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-gray-700 uppercase tracking-wide block mb-1">
+                    Storage Bucket (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={fbStorageBucket}
+                    onChange={e => setFbStorageBucket(e.target.value)}
+                    placeholder="my-site-project-123.appspot.com"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-gray-50/50 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-gray-700 uppercase tracking-wide block mb-1">
+                  Or Paste Full Firebase Config Object (JSON)
+                </label>
+                <textarea
+                  rows={3}
+                  value={fbRawJson}
+                  onChange={e => setFbRawJson(e.target.value)}
+                  placeholder="const firebaseConfig = { apiKey: '...', projectId: '...' };"
+                  className="w-full border border-gray-200 rounded-xl p-2.5 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-gray-50/50 font-mono"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-between gap-2">
+                {isFirebaseConfigured() ? (
+                  <button
+                    type="button"
+                    onClick={handleDisconnectFirebase}
+                    className="px-3 py-2 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 rounded-xl border border-red-200 transition-colors cursor-pointer"
+                  >
+                    Disconnect
+                  </button>
+                ) : <div />}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowFirebaseModal(false)}
+                    className="px-3.5 py-2 text-xs font-semibold text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+                  >
+                    Save &amp; Connect
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
         </div>
       )}
