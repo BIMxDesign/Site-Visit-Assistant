@@ -11,6 +11,7 @@ import {
   getFloorPlans,
   deleteFloorPlan,
   getPunchItemsByFloorPlan,
+  getPunchItem,
   getNextItemNumber,
   savePunchItem,
   deletePunchItem,
@@ -49,6 +50,8 @@ export default function FloorPlanView() {
     showPunchForm,
     openPDFPreview,
     pinColor,
+    pendingPinInstanceObs,
+    clearPendingPinInstanceObs,
   } = useAppStore()
 
   const containerRef = useRef(null)
@@ -83,6 +86,23 @@ export default function FloorPlanView() {
   // Pin Dragging state
   const [draggingPinId,  setDraggingPinId]  = useState(null)
   const activePinDrag = useRef(null)
+
+  // Pin Context Menu (Right Click on Desktop / Long Press on Phone & iPad)
+  const [pinContextMenu, setPinContextMenu] = useState(null)
+  const longPressTimer = useRef(null)
+  const longPressTriggered = useRef(false)
+  const touchStartPos = useRef({ x: 0, y: 0 })
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (pinContextMenu) setPinContextMenu(null)
+        if (pendingPinInstanceObs) clearPendingPinInstanceObs()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [pinContextMenu, pendingPinInstanceObs, clearPendingPinInstanceObs])
 
   // Viewport transform
   const [scale,  setScale]  = useState(1)
@@ -266,7 +286,7 @@ export default function FloorPlanView() {
     offsetRef.current = newOffset
   }
 
-  function onCanvasPointerUp(e) {
+  async function onCanvasPointerUp(e) {
     if (activePinDrag.current) {
       isCanvasDragging.current = false
       return
@@ -297,6 +317,29 @@ export default function FloorPlanView() {
     const worldY = (cy - rect.top  - offsetRef.current.y) / scaleRef.current
 
     if (worldX < 0 || worldY < 0 || worldX > imgNaturalSize.w || worldY > imgNaturalSize.h) return
+
+    // If in "add extra pin instance" mode for an existing observation
+    if (pendingPinInstanceObs) {
+      const targetObsUuid = pendingPinInstanceObs.obsUuid
+      const obsItem = await getPunchItem(targetObsUuid)
+      if (obsItem) {
+        const extraPins = Array.isArray(obsItem.extraPins) ? [...obsItem.extraPins] : []
+        extraPins.push({
+          id: uuidv4(),
+          pinX: worldX,
+          pinY: worldY,
+          floorPlanUuid: currentFloorPlanUuid,
+        })
+        const updatedObs = { ...obsItem, extraPins }
+        await savePunchItem(updatedObs)
+        // Immediately update state so the new pin is rendered, remaining in placement mode to place more instances!
+        setPunchItems(prev => prev.map(p => (p.uuid === updatedObs.uuid ? updatedObs : p)))
+        return
+      } else {
+        clearPendingPinInstanceObs()
+      }
+    }
+
     dropPin(worldX, worldY)
   }
 
@@ -317,45 +360,70 @@ export default function FloorPlanView() {
     offsetRef.current = newOffset
   }
 
-  // ── Pin Drag-and-Drop Handlers ─────────────────────────────────────────────
-  function handlePinPointerDown(e, item) {
+  // ── Pin Drag-and-Drop & Context Menu Handlers ─────────────────────────────
+  function handlePinPointerDown(e, pinObj) {
+    if (e.button === 2) return // Right click handled by onContextMenu
     e.stopPropagation()
     if (e.cancelable) e.preventDefault()
 
     isCanvasDragging.current = false
     dragStartClient.current  = null
-
     setShowFpMenu(false)
+
+    // Long-press detection for Phone & iPad (500ms)
+    longPressTriggered.current = false
+    touchStartPos.current = { x: e.clientX, y: e.clientY }
+    if (longPressTimer.current) clearTimeout(longPressTimer.current)
+    longPressTimer.current = setTimeout(() => {
+      longPressTriggered.current = true
+      activePinDrag.current = null
+      setDraggingPinId(null)
+      try {
+        if (e.target?.releasePointerCapture) {
+          e.target.releasePointerCapture(e.pointerId)
+        }
+      } catch (_) {}
+      openPinContextMenu(e, pinObj)
+    }, 500)
 
     try {
       e.target.setPointerCapture(e.pointerId)
     } catch (_) {}
 
     activePinDrag.current = {
-      uuid:        item.uuid,
+      uuid:        pinObj.item.uuid,
+      dragKey:     pinObj.key,
+      isExtra:     pinObj.isExtra,
+      extraPinId:  pinObj.extraPinId,
       startX:      e.clientX,
       startY:      e.clientY,
-      initialPinX: item.pinX,
-      initialPinY: item.pinY,
-      lastPinX:    item.pinX,
-      lastPinY:    item.pinY,
+      initialPinX: pinObj.pinX,
+      initialPinY: pinObj.pinY,
+      lastPinX:    pinObj.pinX,
+      lastPinY:    pinObj.pinY,
       hasMoved:    false,
     }
-    setDraggingPinId(item.uuid)
+    setDraggingPinId(pinObj.key)
   }
 
-  function handlePinPointerMove(e, item) {
-    if (!activePinDrag.current || activePinDrag.current.uuid !== item.uuid) return
+  function handlePinPointerMove(e, pinObj) {
+    if (!activePinDrag.current || activePinDrag.current.dragKey !== pinObj.key) return
     e.stopPropagation()
     isCanvasDragging.current = false
 
     const dx = e.clientX - activePinDrag.current.startX
     const dy = e.clientY - activePinDrag.current.startY
 
-    if (Math.hypot(dx, dy) > 3) {
+    // If moved > 6px, cancel long-press so drag is active
+    if (Math.hypot(dx, dy) > 6) {
+      if (longPressTimer.current) {
+        clearTimeout(longPressTimer.current)
+        longPressTimer.current = null
+      }
       activePinDrag.current.hasMoved = true
     }
 
+    if (longPressTriggered.current) return
     if (!activePinDrag.current.hasMoved) return
 
     // Convert screen displacement to natural image world coordinates
@@ -369,11 +437,33 @@ export default function FloorPlanView() {
     activePinDrag.current.lastPinY = newY
 
     // Live update visual position
-    setPunchItems(prev => prev.map(p => (p.uuid === item.uuid ? { ...p, pinX: newX, pinY: newY } : p)))
+    setPunchItems(prev => prev.map(p => {
+      if (p.uuid !== pinObj.item.uuid) return p
+      if (!pinObj.isExtra) {
+        return { ...p, pinX: newX, pinY: newY }
+      } else {
+        const extraPins = (p.extraPins || []).map(ep =>
+          ep.id === pinObj.extraPinId ? { ...ep, pinX: newX, pinY: newY } : ep
+        )
+        return { ...p, extraPins }
+      }
+    }))
   }
 
-  async function handlePinPointerUp(e, item) {
-    if (!activePinDrag.current || activePinDrag.current.uuid !== item.uuid) return
+  async function handlePinPointerUp(e, pinObj) {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+
+    if (longPressTriggered.current) {
+      longPressTriggered.current = false
+      activePinDrag.current = null
+      setDraggingPinId(null)
+      return
+    }
+
+    if (!activePinDrag.current || activePinDrag.current.dragKey !== pinObj.key) return
     e.stopPropagation()
     isCanvasDragging.current = false
 
@@ -387,12 +477,83 @@ export default function FloorPlanView() {
 
     if (hasMoved) {
       // Repositioned -> Save to database
-      const updated = { ...item, pinX: lastPinX, pinY: lastPinY }
-      await savePunchItem(updated)
+      const currentItem = await getPunchItem(pinObj.item.uuid)
+      if (currentItem) {
+        if (!pinObj.isExtra) {
+          await savePunchItem({ ...currentItem, pinX: lastPinX, pinY: lastPinY })
+        } else {
+          const extraPins = (currentItem.extraPins || []).map(ep =>
+            ep.id === pinObj.extraPinId ? { ...ep, pinX: lastPinX, pinY: lastPinY } : ep
+          )
+          await savePunchItem({ ...currentItem, extraPins })
+        }
+      }
     } else {
       // Tap without dragging -> Open Punch Item Form
-      setCurrentPunchItem(item.uuid)
+      setCurrentPunchItem(pinObj.item.uuid)
       openPunchForm()
+    }
+  }
+
+  function openPinContextMenu(e, pinObj) {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+    const cx = e.clientX != null ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : window.innerWidth / 2)
+    const cy = e.clientY != null ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : window.innerHeight / 2)
+
+    const menuW = 210
+    const menuH = 130
+    const x = Math.max(12, Math.min(window.innerWidth - menuW - 12, cx - 15))
+    const y = Math.max(12, Math.min(window.innerHeight - menuH - 12, cy - 15))
+
+    setPinContextMenu({
+      pinObj,
+      x,
+      y,
+    })
+  }
+
+  async function handleDeletePinInstance(pinObj) {
+    if (!pinObj?.item) return
+    const currentItem = await getPunchItem(pinObj.item.uuid)
+    if (!currentItem) return
+
+    const totalInstances = 1 + (currentItem.extraPins?.length || 0)
+    const num = currentItem.itemNumber ? `#${currentItem.itemNumber}` : ''
+
+    if (totalInstances > 1) {
+      const confirmed = window.confirm(
+        `Delete this pin instance from the key plan?\n\nObservation ${num} currently has ${totalInstances} pin instances on the drawing.\n\nDeleting this instance will remove it from the drawing, leaving ${totalInstances - 1} remaining pin instance(s).\n\n(Observation notes and photos will remain intact.)`
+      )
+      if (!confirmed) return
+
+      if (pinObj.isExtra) {
+        const remaining = (currentItem.extraPins || []).filter(ep => ep.id !== pinObj.extraPinId)
+        await savePunchItem({ ...currentItem, extraPins: remaining })
+      } else {
+        const extras = currentItem.extraPins || []
+        if (extras.length > 0) {
+          const [newPrimary, ...remainingExtras] = extras
+          await savePunchItem({
+            ...currentItem,
+            pinX: newPrimary.pinX,
+            pinY: newPrimary.pinY,
+            floorPlanUuid: newPrimary.floorPlanUuid || currentItem.floorPlanUuid,
+            extraPins: remainingExtras
+          })
+        }
+      }
+      await load()
+    } else {
+      // Last instance
+      const confirmed = window.confirm(
+        `Delete Observation ${num}?\n\n⚠️ Warning: This is the LAST remaining pin instance for Observation ${num}.\n\nDeleting this pin will permanently remove this observation, all notes, and attached photos from the project, and automatically resequence remaining pins.`
+      )
+      if (!confirmed) return
+      await deletePunchItem(currentItem.uuid)
+      await load()
     }
   }
 
@@ -436,7 +597,18 @@ export default function FloorPlanView() {
 
   async function handleDeleteItem(item) {
     const num = item.itemNumber ? `#${item.itemNumber}` : 'this observation'
-    if (!window.confirm(`Delete observation ${num}?\n\nThis will remove this observation, all notes, and attached photos, and automatically resequence remaining pins.`)) return
+    const totalInstances = 1 + (item.extraPins?.length || 0)
+    let confirmed = false
+    if (totalInstances > 1) {
+      confirmed = window.confirm(
+        `Delete observation ${num}?\n\nThis observation currently has ${totalInstances} pin instances across key plans. Deleting this observation will permanently remove all ${totalInstances} pin instances, notes, and attached photos, and automatically resequence remaining pins.`
+      )
+    } else {
+      confirmed = window.confirm(
+        `Delete observation ${num}?\n\n⚠️ Warning: This is the LAST remaining pin instance for Observation ${num}.\n\nDeleting it will permanently remove this observation, all notes, and attached photos from the project, and automatically resequence remaining pins.`
+      )
+    }
+    if (!confirmed) return
     await deletePunchItem(item.uuid)
     await load()
   }
@@ -570,6 +742,43 @@ export default function FloorPlanView() {
 
     return list.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
   }, [punchItems, obsFilter])
+
+  // All pin instances (primary pin + any extra pin instances) on this floor plan drawing
+  const allPinsToRender = useMemo(() => {
+    if (!imgLoaded) return []
+    const list = []
+    filteredItems.forEach(item => {
+      // Primary pin
+      const showPrimary = (item.floorPlanUuid === currentFloorPlanUuid || (!item.floorPlanUuid && item.pinX != null)) && item.pinX != null && item.pinY != null
+      if (showPrimary) {
+        list.push({
+          key: `primary-${item.uuid}`,
+          item,
+          pinX: item.pinX,
+          pinY: item.pinY,
+          isExtra: false,
+          extraPinId: null,
+        })
+      }
+      // Extra pin instances
+      if (Array.isArray(item.extraPins)) {
+        item.extraPins.forEach((ep, idx) => {
+          const showExtra = (ep.floorPlanUuid === currentFloorPlanUuid || (!ep.floorPlanUuid && item.floorPlanUuid === currentFloorPlanUuid)) && ep.pinX != null && ep.pinY != null
+          if (showExtra) {
+            list.push({
+              key: `extra-${item.uuid}-${ep.id || idx}`,
+              item,
+              pinX: ep.pinX,
+              pinY: ep.pinY,
+              isExtra: true,
+              extraPinId: ep.id,
+            })
+          }
+        })
+      }
+    })
+    return list
+  }, [imgLoaded, filteredItems, currentFloorPlanUuid])
 
   const sortedItems = filteredItems
 
@@ -972,21 +1181,35 @@ export default function FloorPlanView() {
               />
 
               {/* ── Draggable Pins ── */}
-              {imgLoaded && filteredItems.map(item => {
-                const sx = offset.x + item.pinX * scale
-                const sy = offset.y + item.pinY * scale
-                const isDragging = draggingPinId === item.uuid
+              {imgLoaded && allPinsToRender.map(pinObj => {
+                const { item, pinX, pinY, key, isExtra } = pinObj
+                const sx = offset.x + pinX * scale
+                const sy = offset.y + pinY * scale
+                const isDragging = draggingPinId === key
                 const photoData = showPhotoPreviews ? pinPhotos[item.uuid] : null
 
                 if (photoData) {
                   // Pin with Image Preview Bubble
                   return (
                     <button
-                      key={item.uuid}
+                      key={key}
                       data-pin="true"
-                      onPointerDown={(e) => handlePinPointerDown(e, item)}
-                      onPointerMove={(e) => handlePinPointerMove(e, item)}
-                      onPointerUp={(e) => handlePinPointerUp(e, item)}
+                      onPointerDown={(e) => handlePinPointerDown(e, pinObj)}
+                      onPointerMove={(e) => handlePinPointerMove(e, pinObj)}
+                      onPointerUp={(e) => handlePinPointerUp(e, pinObj)}
+                      onPointerCancel={() => {
+                        if (longPressTimer.current) {
+                          clearTimeout(longPressTimer.current)
+                          longPressTimer.current = null
+                        }
+                        activePinDrag.current = null
+                        setDraggingPinId(null)
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        openPinContextMenu(e, pinObj)
+                      }}
                       onMouseDown={(e) => e.stopPropagation()}
                       onTouchStart={(e) => e.stopPropagation()}
                       style={{
@@ -1004,7 +1227,7 @@ export default function FloorPlanView() {
                         transition:      isDragging ? 'none' : 'transform 0.15s ease',
                         outline:         'none',
                       }}
-                      title={`Pin #${item.itemNumber} (Drag to move, Tap to edit)`}
+                      title={`Pin #${item.itemNumber}${isExtra ? ' (Instance)' : ''} (Tap to edit, Right-click or long-press for options)`}
                     >
                       <div style={{
                         position: 'relative',
@@ -1070,11 +1293,24 @@ export default function FloorPlanView() {
                 // Standard Numbered Circle Pin
                 return (
                   <button
-                    key={item.uuid}
+                    key={key}
                     data-pin="true"
-                    onPointerDown={(e) => handlePinPointerDown(e, item)}
-                    onPointerMove={(e) => handlePinPointerMove(e, item)}
-                    onPointerUp={(e) => handlePinPointerUp(e, item)}
+                    onPointerDown={(e) => handlePinPointerDown(e, pinObj)}
+                    onPointerMove={(e) => handlePinPointerMove(e, pinObj)}
+                    onPointerUp={(e) => handlePinPointerUp(e, pinObj)}
+                    onPointerCancel={() => {
+                      if (longPressTimer.current) {
+                        clearTimeout(longPressTimer.current)
+                        longPressTimer.current = null
+                      }
+                      activePinDrag.current = null
+                      setDraggingPinId(null)
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      openPinContextMenu(e, pinObj)
+                    }}
                     onMouseDown={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
                     style={{
@@ -1101,7 +1337,7 @@ export default function FloorPlanView() {
                       touchAction:  'none',
                       transition:   isDragging ? 'none' : 'transform 0.15s ease',
                     }}
-                    title={`Pin #${item.itemNumber} (Drag to move, Tap to edit)`}
+                    title={`Pin #${item.itemNumber}${isExtra ? ' (Instance)' : ''} (Tap to edit, Right-click or long-press for options)`}
                   >
                     {item.itemNumber}
                   </button>
@@ -1124,6 +1360,64 @@ export default function FloorPlanView() {
               </button>
             </div>
           )}
+
+          {/* Floating Instruction Banner for Adding Pin Instance */}
+          {pendingPinInstanceObs && (() => {
+            const currentObs = punchItems.find(p => p.uuid === pendingPinInstanceObs.obsUuid)
+            const count = currentObs ? 1 + (currentObs.extraPins?.length || 0) : 1
+            return (
+              <div
+                data-no-canvas-click="true"
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-40 text-white px-4 py-2.5 rounded-2xl shadow-2xl border border-white/20 flex items-center gap-3 animate-fade-in max-w-[92vw]"
+                style={{ background: 'var(--brand-header, #1e40af)' }}
+              >
+                <div
+                  className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs text-white flex-shrink-0 shadow-sm"
+                  style={{ background: pinColor || '#a40e26', border: '1.5px solid white' }}
+                >
+                  #{pendingPinInstanceObs.itemNumber}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-bold leading-tight truncate">
+                      Tap anywhere to place duplicate Pin #{pendingPinInstanceObs.itemNumber}
+                    </p>
+                    <span className="text-[10px] font-semibold bg-white/20 px-2 py-0.5 rounded-full flex-shrink-0">
+                      {count} on plan
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-white/80 leading-tight truncate">
+                    Tap to add more pins. Stop by pressing Esc or Cancel/Done.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 ml-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      clearPendingPinInstanceObs()
+                    }}
+                    className="px-3 py-1.5 bg-white/25 hover:bg-white/35 active:scale-95 rounded-xl text-xs font-bold cursor-pointer text-white flex items-center gap-1 shadow-xs transition-all"
+                    title="Done placing pin instances (or press Escape)"
+                  >
+                    <Check size={14} strokeWidth={2.5} />
+                    <span>Done</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      clearPendingPinInstanceObs()
+                    }}
+                    className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 active:scale-95 rounded-xl text-xs font-medium cursor-pointer text-white/85 hover:text-white transition-all"
+                    title="Cancel placing more pins (or press Escape)"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
 
           {/* ── Zoom controls ── */}
           <div
@@ -1164,7 +1458,7 @@ export default function FloorPlanView() {
             }}
           >
             <div style={{ background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999 }}>
-              {filteredItems.length} pin{filteredItems.length !== 1 ? 's' : ''}
+              {allPinsToRender.length} pin{allPinsToRender.length !== 1 ? 's' : ''}
             </div>
             <button
               type="button"
@@ -1435,6 +1729,11 @@ export default function FloorPlanView() {
                             {item.priority}
                           </span>
                         )}
+                        {item.extraPins?.length > 0 && (
+                          <span className="text-[10px] font-semibold text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                            {item.extraPins.length + 1} pins
+                          </span>
+                        )}
                       </div>
 
                       {item.notes && item.title && (
@@ -1539,6 +1838,83 @@ export default function FloorPlanView() {
             load()
           }}
         />
+      )}
+
+      {/* ── Pin Context Menu (Right Click on Desktop, Long Press on Phone/iPad) ── */}
+      {pinContextMenu && (
+        <div
+          className="fixed inset-0 z-[100] select-none"
+          onClick={() => setPinContextMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setPinContextMenu(null)
+          }}
+          onTouchMove={() => setPinContextMenu(null)}
+        >
+          <div
+            className="fixed bg-white rounded-2xl shadow-2xl border border-gray-200 p-1.5 min-w-[210px] animate-fade-in"
+            style={{
+              left: pinContextMenu.x,
+              top: pinContextMenu.y,
+              boxShadow: '0 20px 35px -5px rgba(0, 0, 0, 0.4), 0 10px 15px -5px rgba(0, 0, 0, 0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.stopPropagation()}
+          >
+            <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0"
+                  style={{ background: pinColor || '#a40e26' }}
+                >
+                  #{pinContextMenu.pinObj.item.itemNumber}
+                </span>
+                <span className="text-xs font-bold text-gray-800 truncate">
+                  Pin #{pinContextMenu.pinObj.item.itemNumber}
+                </span>
+              </div>
+              {(pinContextMenu.pinObj.item.extraPins?.length || 0) > 0 ? (
+                <span className="text-[10px] font-semibold text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                  {(pinContextMenu.pinObj.item.extraPins.length || 0) + 1} pins
+                </span>
+              ) : (
+                <span className="text-[10px] font-medium text-gray-400 flex-shrink-0">
+                  Single Pin
+                </span>
+              )}
+            </div>
+
+            <div className="p-1 space-y-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const targetUuid = pinContextMenu.pinObj.item.uuid
+                  setPinContextMenu(null)
+                  setCurrentPunchItem(targetUuid)
+                  openPunchForm()
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors cursor-pointer text-left"
+              >
+                <Edit2 size={15} className="text-brand-600 flex-shrink-0" />
+                <span>Edit Observation</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const targetPinObj = pinContextMenu.pinObj
+                  setPinContextMenu(null)
+                  handleDeletePinInstance(targetPinObj)
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50 transition-colors cursor-pointer text-left"
+              >
+                <Trash2 size={15} className="text-red-500 flex-shrink-0" />
+                <span>Delete Pin</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

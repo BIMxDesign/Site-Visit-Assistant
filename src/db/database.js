@@ -477,7 +477,18 @@ export async function getPunchItems(projectUuid) {
   }
 }
 export async function getPunchItemsByFloorPlan(floorPlanUuid) {
-  return db.punchItems.where('floorPlanUuid').equals(floorPlanUuid).toArray()
+  if (!floorPlanUuid) return []
+  const directItems = await db.punchItems.where('floorPlanUuid').equals(floorPlanUuid).toArray()
+  const allItems = await db.punchItems.toArray()
+  const extraItems = allItems.filter(it =>
+    it.floorPlanUuid !== floorPlanUuid &&
+    Array.isArray(it.extraPins) &&
+    it.extraPins.some(ep => ep.floorPlanUuid === floorPlanUuid)
+  )
+  const map = new Map()
+  directItems.forEach(it => map.set(it.uuid, it))
+  extraItems.forEach(it => map.set(it.uuid, it))
+  return Array.from(map.values())
 }
 export async function getPunchItem(uuid) {
   return db.punchItems.where('uuid').equals(uuid).first()

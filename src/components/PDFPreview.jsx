@@ -85,45 +85,85 @@ export default function PDFPreview() {
   const [filterTrade,     setFilterTrade]     = useState('All')
 
   // Visibility Controls for Report Export Fields
-  const [exportFields, setExportFields] = useState({
-    keyPlans: true, // Key Plans
-    photos:   true, // Observation photos
-    priority: true, // Priority level (High, Medium, Low)
-    trade:    true, // Category
-    dueDate:  true, // Due Date
-    notes:    true, // Pin Observation Description
-    reportCreatedBy: true, // Report Created By
-    attendees: true, // List of Attendees
+  const [exportFields, setExportFields] = useState(() => {
+    const defaults = {
+      keyPlans: true, // Key Plans
+      photos:   true, // Observation photos
+      status:   true, // Status
+      priority: true, // Priority level (High, Medium, Low)
+      trade:    true, // Category
+      dueDate:  true, // Due Date
+      notes:    true, // Pin Observation Description
+      reportCreatedBy: true, // Report Created By
+      attendees: true, // List of Attendees
+    }
+    try {
+      const saved = localStorage.getItem('sitepunch_export_fields')
+      if (saved) return { ...defaults, ...JSON.parse(saved) }
+    } catch {}
+    return defaults
   })
 
+  // Observation Images Layout: 'below' (Below observation notes) or 'right' (On the right side)
+  const [imageLayout, setImageLayout] = useState(() => {
+    try {
+      return localStorage.getItem('sitepunch_pdf_image_layout') || 'below'
+    } catch {
+      return 'below'
+    }
+  })
+
+  const handleSetImageLayout = (layout) => {
+    setImageLayout(layout)
+    try {
+      localStorage.setItem('sitepunch_pdf_image_layout', layout)
+    } catch {}
+  }
+
   const toggleExportField = (key) => {
-    setExportFields(prev => ({ ...prev, [key]: !prev[key] }))
+    setExportFields(prev => {
+      const next = { ...prev, [key]: !prev[key] }
+      try {
+        localStorage.setItem('sitepunch_export_fields', JSON.stringify(next))
+      } catch {}
+      return next
+    })
   }
 
   const handleSelectAllFields = () => {
-    setExportFields({
+    const all = {
       keyPlans: true,
       photos:   true,
+      status:   true,
       priority: true,
       trade:    true,
       dueDate:  true,
       notes:    true,
       reportCreatedBy: true,
       attendees: true,
-    })
+    }
+    setExportFields(all)
+    try {
+      localStorage.setItem('sitepunch_export_fields', JSON.stringify(all))
+    } catch {}
   }
 
   const handleDeselectAllFields = () => {
-    setExportFields({
+    const none = {
       keyPlans: false,
       photos:   false,
+      status:   false,
       priority: false,
       trade:    false,
       dueDate:  false,
       notes:    false,
       reportCreatedBy: false,
       attendees: false,
-    })
+    }
+    setExportFields(none)
+    try {
+      localStorage.setItem('sitepunch_export_fields', JSON.stringify(none))
+    } catch {}
   }
 
   useEffect(() => {
@@ -255,40 +295,56 @@ export default function PDFPreview() {
           // Pin radius proportioned to image dimensions for crisp readability
           const radius = Math.max(18, Math.round(Math.min(w, h) * 0.02))
 
-          // 1. Gather all valid pins and map to canvas coordinates
+          // 1. Gather all valid pins (including extra pin instances) and map to canvas coordinates
           const pinDataList = []
           itemsToDraw.forEach(item => {
-            if (item.pinX == null || item.pinY == null) return
             if (!item.notes || !item.notes.trim()) return // Ignore any blank observation pins
-            const rawX = Number(item.pinX)
-            const rawY = Number(item.pinY)
-            if (isNaN(rawX) || isNaN(rawY)) return
 
-            // Compute px and py in canvas pixels
-            let px = rawX
-            let py = rawY
-
-            // Handle normalized coordinates (0 to 1) if present
-            if (rawX <= 1 && rawY <= 1 && w > 1 && h > 1) {
-              px = rawX * w
-              py = rawY * h
-            } else if (img.naturalWidth && w !== img.naturalWidth) {
-              px = rawX * (w / img.naturalWidth)
-              py = rawY * (h / img.naturalHeight)
+            const pinsToProcess = []
+            // Primary pin on this floor plan
+            if (item.pinX != null && item.pinY != null && (item.floorPlanUuid === floorPlan.uuid || !item.floorPlanUuid)) {
+              pinsToProcess.push({ x: Number(item.pinX), y: Number(item.pinY) })
+            }
+            // Extra pins on this floor plan
+            if (Array.isArray(item.extraPins)) {
+              item.extraPins.forEach(ep => {
+                if (ep.pinX != null && ep.pinY != null && (ep.floorPlanUuid === floorPlan.uuid || (!ep.floorPlanUuid && item.floorPlanUuid === floorPlan.uuid))) {
+                  pinsToProcess.push({ x: Number(ep.pinX), y: Number(ep.pinY) })
+                }
+              })
             }
 
-            // Clamped original coordinates
-            const origX = Math.max(radius, Math.min(w - radius, px))
-            const origY = Math.max(radius, Math.min(h - radius, py))
+            pinsToProcess.forEach(loc => {
+              const rawX = loc.x
+              const rawY = loc.y
+              if (isNaN(rawX) || isNaN(rawY)) return
 
-            pinDataList.push({
-              item,
-              origX,
-              origY,
-              x: origX,
-              y: origY,
-              radius,
-              displaced: false,
+              // Compute px and py in canvas pixels
+              let px = rawX
+              let py = rawY
+
+              // Handle normalized coordinates (0 to 1) if present
+              if (rawX <= 1 && rawY <= 1 && w > 1 && h > 1) {
+                px = rawX * w
+                py = rawY * h
+              } else if (img.naturalWidth && w !== img.naturalWidth) {
+                px = rawX * (w / img.naturalWidth)
+                py = rawY * (h / img.naturalHeight)
+              }
+
+              // Clamped original coordinates
+              const origX = Math.max(radius, Math.min(w - radius, px))
+              const origY = Math.max(radius, Math.min(h - radius, py))
+
+              pinDataList.push({
+                item,
+                origX,
+                origY,
+                x: origX,
+                y: origY,
+                radius,
+                displaced: false,
+              })
             })
           })
 
@@ -445,7 +501,8 @@ export default function PDFPreview() {
       if (exportFields.keyPlans)       headers.push('Key Plan')
       if (exportFields.trade)          headers.push('Category')
       if (exportFields.priority)       headers.push('Priority')
-      headers.push('Status', 'Assigned To')
+      if (exportFields.status)         headers.push('Status')
+      headers.push('Assigned To')
       if (exportFields.dueDate)        headers.push('Due Date')
       if (exportFields.notes)          headers.push('Observation Notes')
       headers.push('Visit Date', 'Visit Time', 'Weather')
@@ -488,7 +545,7 @@ export default function PDFPreview() {
         if (exportFields.keyPlans)       cols.push(escapeCSV(fp?.name || ''))
         if (exportFields.trade)          cols.push(escapeCSV(item.trade || ''))
         if (exportFields.priority)       cols.push(escapeCSV(item.priority || ''))
-        cols.push(escapeCSV(normalizeObservationStatus(item.status)))
+        if (exportFields.status)         cols.push(escapeCSV(normalizeObservationStatus(item.status)))
         cols.push(escapeCSV(item.assignedTo || ''))
         if (exportFields.dueDate)        cols.push(escapeCSV(item.dueDate || ''))
         if (exportFields.notes)          cols.push(escapeCSV(item.notes || ''))
@@ -585,7 +642,10 @@ export default function PDFPreview() {
 
       for (let idx = 0; idx < keyPlansToExport.length; idx++) {
         const fp = keyPlansToExport[idx]
-        const itemsInFp = itemsToExport.filter(it => it.floorPlanUuid === fp.uuid)
+        const itemsInFp = itemsToExport.filter(it =>
+          it.floorPlanUuid === fp.uuid ||
+          (Array.isArray(it.extraPins) && it.extraPins.some(ep => ep.floorPlanUuid === fp.uuid))
+        )
 
         // Render floor plan with pins
         const rendered = await renderFloorPlanWithPins(fp, itemsInFp)
@@ -938,7 +998,7 @@ export default function PDFPreview() {
         // 2. Avoid dead space by allowing text column to expand up to the photos
         // 3. Side-by-side arrangement for multiple photos when possible to prevent excessive vertical height
         const contentW = W - margin * 2
-        const maxPhotoAreaW = Math.min(contentW * 0.55, 105)
+        const maxPhotoAreaW = imageLayout === 'below' ? contentW : Math.min(contentW * 0.55, 105)
         const photoGap = 3.5
 
         const photosToRender = photos.slice(0, 3)
@@ -952,35 +1012,50 @@ export default function PDFPreview() {
           const aspect = photo.aspect && photo.aspect > 0 ? photo.aspect : 1.33
           let pW, pH
 
-          if (aspect >= 1.15) {
-            // Landscape photo: generous width, clean height, defects easily visible
-            pW = Math.min(maxPhotoAreaW, 82)
-            pH = pW / aspect
-            if (pH > 55) {
+          if (imageLayout === 'below') {
+            if (aspect >= 1.15) {
+              pW = Math.min(contentW, 110)
+              pH = pW / aspect
+              if (pH > 65) { pH = 65; pW = pH * aspect }
+            } else if (aspect >= 0.85) {
               pH = 55
               pW = pH * aspect
+            } else {
+              pH = 65
+              pW = pH * aspect
+              if (pW > contentW) { pW = contentW; pH = pW / aspect }
             }
-            if (pH < 38) {
-              pH = 38
-              pW = Math.min(maxPhotoAreaW, pH * aspect)
-            }
-          } else if (aspect >= 0.85) {
-            // Square or near-square
-            pH = 50
-            pW = pH * aspect
           } else {
-            // Portrait photo (e.g. 3:4 or 9:16 vertical phone photo):
-            // Keep height generous so portrait image is readable and not a tiny strip
-            pH = 56
-            pW = pH * aspect
-            if (pW < 35) {
-              // For extreme vertical photos (e.g. 9:16), ensure readable minimum width
-              pW = 35
-              pH = Math.min(62, pW / aspect)
-            }
-            if (pW > maxPhotoAreaW) {
-              pW = maxPhotoAreaW
+            if (aspect >= 1.15) {
+              // Landscape photo: generous width, clean height, defects easily visible
+              pW = Math.min(maxPhotoAreaW, 82)
               pH = pW / aspect
+              if (pH > 55) {
+                pH = 55
+                pW = pH * aspect
+              }
+              if (pH < 38) {
+                pH = 38
+                pW = Math.min(maxPhotoAreaW, pH * aspect)
+              }
+            } else if (aspect >= 0.85) {
+              // Square or near-square
+              pH = 50
+              pW = pH * aspect
+            } else {
+              // Portrait photo (e.g. 3:4 or 9:16 vertical phone photo):
+              // Keep height generous so portrait image is readable and not a tiny strip
+              pH = 56
+              pW = pH * aspect
+              if (pW < 35) {
+                // For extreme vertical photos (e.g. 9:16), ensure readable minimum width
+                pW = 35
+                pH = Math.min(62, pW / aspect)
+              }
+              if (pW > maxPhotoAreaW) {
+                pW = maxPhotoAreaW
+                pH = pW / aspect
+              }
             }
           }
           photoDims.push({ photo, pW, pH, aspect })
@@ -991,66 +1066,108 @@ export default function PDFPreview() {
           const a1 = p1.aspect && p1.aspect > 0 ? p1.aspect : 1.33
           const a2 = p2.aspect && p2.aspect > 0 ? p2.aspect : 1.33
 
-          let targetH = 40
-          let w1 = targetH * a1
-          let w2 = targetH * a2
-          let totalW = w1 + w2 + photoGap
-
-          if (totalW > maxPhotoAreaW) {
-            const scale = (maxPhotoAreaW - photoGap) / (w1 + w2)
-            if (targetH * scale >= 30) {
+          if (imageLayout === 'below') {
+            let targetH = 42
+            let w1 = targetH * a1
+            let w2 = targetH * a2
+            let totalW = w1 + w2 + photoGap
+            if (totalW > contentW) {
+              const scale = (contentW - photoGap) / (w1 + w2)
               targetH *= scale
-              w1 = targetH * a1
-              w2 = targetH * a2
-              photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
-              photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
-            } else {
-              shouldStack = true
-              for (const photo of validPhotos) {
-                const aspect = photo.aspect && photo.aspect > 0 ? photo.aspect : 1.33
-                let pH = 38
-                let pW = pH * aspect
-                if (pW > maxPhotoAreaW) {
-                  pW = maxPhotoAreaW
-                  pH = pW / aspect
-                }
-                photoDims.push({ photo, pW, pH, aspect })
-              }
-            }
-          } else {
-            if (totalW < maxPhotoAreaW * 0.75 && targetH < 46) {
-              const boost = Math.min(1.2, (maxPhotoAreaW * 0.85) / totalW)
-              targetH *= boost
               w1 = targetH * a1
               w2 = targetH * a2
             }
             photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
             photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
+          } else {
+            let targetH = 40
+            let w1 = targetH * a1
+            let w2 = targetH * a2
+            let totalW = w1 + w2 + photoGap
+
+            if (totalW > maxPhotoAreaW) {
+              const scale = (maxPhotoAreaW - photoGap) / (w1 + w2)
+              if (targetH * scale >= 30) {
+                targetH *= scale
+                w1 = targetH * a1
+                w2 = targetH * a2
+                photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
+                photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
+              } else {
+                shouldStack = true
+                for (const photo of validPhotos) {
+                  const aspect = photo.aspect && photo.aspect > 0 ? photo.aspect : 1.33
+                  let pH = 38
+                  let pW = pH * aspect
+                  if (pW > maxPhotoAreaW) {
+                    pW = maxPhotoAreaW
+                    pH = pW / aspect
+                  }
+                  photoDims.push({ photo, pW, pH, aspect })
+                }
+              }
+            } else {
+              if (totalW < maxPhotoAreaW * 0.75 && targetH < 46) {
+                const boost = Math.min(1.2, (maxPhotoAreaW * 0.85) / totalW)
+                targetH *= boost
+                w1 = targetH * a1
+                w2 = targetH * a2
+              }
+              photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
+              photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
+            }
           }
         } else if (numPhotos >= 3) {
-          let targetH = 32
-          const aspects = validPhotos.map(p => (p.aspect && p.aspect > 0 ? p.aspect : 1.33))
-          const widths = aspects.map(a => targetH * a)
-          const totalW = widths.reduce((s, w) => s + w, 0) + (numPhotos - 1) * photoGap
-
-          if (totalW <= maxPhotoAreaW) {
-            validPhotos.forEach((photo, idx) => {
-              photoDims.push({ photo, pW: widths[idx], pH: targetH, aspect: aspects[idx] })
-            })
-          } else {
-            const scale = (maxPhotoAreaW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
-            if (targetH * scale >= 26) {
-              targetH *= scale
+          if (imageLayout === 'below') {
+            let targetH = 36
+            const aspects = validPhotos.map(p => (p.aspect && p.aspect > 0 ? p.aspect : 1.33))
+            const widths = aspects.map(a => targetH * a)
+            const totalW = widths.reduce((s, w) => s + w, 0) + (numPhotos - 1) * photoGap
+            if (totalW > contentW) {
+              const scale = (contentW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
+              if (targetH * scale >= 22) {
+                targetH *= scale
+                validPhotos.forEach((photo, idx) => {
+                  photoDims.push({ photo, pW: targetH * aspects[idx], pH: targetH, aspect: aspects[idx] })
+                })
+              } else {
+                shouldStack = true
+                validPhotos.forEach((photo, idx) => {
+                  let pH = 36
+                  let pW = Math.min(contentW, pH * aspects[idx])
+                  photoDims.push({ photo, pW, pH, aspect: aspects[idx] })
+                })
+              }
+            } else {
               validPhotos.forEach((photo, idx) => {
-                photoDims.push({ photo, pW: targetH * aspects[idx], pH: targetH, aspect: aspects[idx] })
+                photoDims.push({ photo, pW: widths[idx], pH: targetH, aspect: aspects[idx] })
+              })
+            }
+          } else {
+            let targetH = 32
+            const aspects = validPhotos.map(p => (p.aspect && p.aspect > 0 ? p.aspect : 1.33))
+            const widths = aspects.map(a => targetH * a)
+            const totalW = widths.reduce((s, w) => s + w, 0) + (numPhotos - 1) * photoGap
+
+            if (totalW <= maxPhotoAreaW) {
+              validPhotos.forEach((photo, idx) => {
+                photoDims.push({ photo, pW: widths[idx], pH: targetH, aspect: aspects[idx] })
               })
             } else {
-              shouldStack = true
-              validPhotos.forEach((photo, idx) => {
-                let pH = 34
-                let pW = Math.min(maxPhotoAreaW, pH * aspects[idx])
-                photoDims.push({ photo, pW, pH, aspect: aspects[idx] })
-              })
+              const scale = (maxPhotoAreaW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
+              if (targetH * scale >= 26) {
+                targetH *= scale
+                validPhotos.forEach((photo, idx) => {
+                  photoDims.push({ photo, pW: targetH * aspects[idx], pH: targetH, aspect: aspects[idx] })
+                })
+              } else {
+                shouldStack = true
+                validPhotos.forEach((photo, idx) => {
+                  let pH = 34
+                  let pW = Math.min(maxPhotoAreaW, pH * aspects[idx])
+                  photoDims.push({ photo, pW, pH, aspect: aspects[idx] })
+                })
+              }
             }
           }
         }
@@ -1064,11 +1181,12 @@ export default function PDFPreview() {
         // Right-aligned photo starting X position
         const photoStartX = (W - margin) - actualPhotoAreaW
 
-        // Left text column width: adaptively takes all available width up to a 6mm gutter before photos!
-        // Prevents artificial dead space in the middle of the page
-        const textW = hasPhotos
-          ? Math.max(50, photoStartX - margin - 6)
-          : contentW
+        // Left text column width:
+        // When images are placed below notes, text takes full content width!
+        // When images are on right, text adapts up to photos gutter
+        const textW = (imageLayout === 'below' || !hasPhotos)
+          ? contentW
+          : Math.max(50, photoStartX - margin - 6)
 
         // ── Observation text and label preparation ──
         const rawObsText = (item.notes && item.title && item.notes.trim() !== item.title.trim())
@@ -1090,7 +1208,9 @@ export default function PDFPreview() {
         if (exportFields.trade) {
           headingParts.push(categoryLabel)
         }
-        headingParts.push(`Status: ${normalizeObservationStatus(item.status)}`)
+        if (exportFields.status) {
+          headingParts.push(`Status: ${normalizeObservationStatus(item.status)}`)
+        }
         if (item.assignedTo) {
           headingParts.push(`Assigned: ${item.assignedTo}`)
         }
@@ -1131,7 +1251,9 @@ export default function PDFPreview() {
             totalPhotoH = Math.max(...photoDims.map(d => d.pH))
           }
         }
-        const itemH = Math.max(textH, totalPhotoH) + 4
+        const itemH = imageLayout === 'below'
+          ? textH + (hasPhotos ? (totalPhotoH + sectionMargin) : 0) + 4
+          : Math.max(textH, totalPhotoH) + 4
 
         // If item overflows current page, move to next page
         if (y + itemH > H - margin - 4) {
@@ -1255,39 +1377,85 @@ export default function PDFPreview() {
           textY += bH + 3.0
         }
 
-        // 4. Photos (right-aligned, adaptive sizing and placement)
+        // 4. Photos (placement based on imageLayout: 'below' observation notes or 'right' side)
         let photoEndY = startY
         if (hasPhotos) {
-          if (shouldStack) {
-            let currentPy = startY
-            for (const d of photoDims) {
-              const px = (W - margin) - d.pW
-              try {
-                doc.addImage(d.photo.imageData, 'JPEG', px, currentPy, d.pW, d.pH, '', 'FAST')
-                doc.setDrawColor(226, 232, 240)
-                doc.setLineWidth(0.2)
-                doc.rect(px, currentPy, d.pW, d.pH)
-              } catch {}
-              currentPy += d.pH + photoGap
+          if (imageLayout === 'below') {
+            // Render photos horizontally below the notes and badges
+            const currentPy = textY
+            if (shouldStack) {
+              let py = currentPy
+              for (const d of photoDims) {
+                if (py + d.pH > H - margin - 4) {
+                  addPageNum()
+                  doc.addPage()
+                  py = margin
+                }
+                const px = margin
+                try {
+                  doc.addImage(d.photo.imageData, 'JPEG', px, py, d.pW, d.pH, '', 'FAST')
+                  doc.setDrawColor(226, 232, 240)
+                  doc.setLineWidth(0.2)
+                  doc.rect(px, py, d.pW, d.pH)
+                } catch {}
+                py += d.pH + photoGap
+              }
+              photoEndY = py - photoGap
+            } else {
+              // Side-by-side row below notes
+              const rowH = Math.max(...photoDims.map(d => d.pH))
+              let py = currentPy
+              if (py + rowH > H - margin - 4) {
+                addPageNum()
+                doc.addPage()
+                py = margin
+              }
+              let px = margin
+              for (const d of photoDims) {
+                try {
+                  doc.addImage(d.photo.imageData, 'JPEG', px, py, d.pW, d.pH, '', 'FAST')
+                  doc.setDrawColor(226, 232, 240)
+                  doc.setLineWidth(0.2)
+                  doc.rect(px, py, d.pW, d.pH)
+                } catch {}
+                px += d.pW + photoGap
+              }
+              photoEndY = py + rowH
             }
-            photoEndY = currentPy - photoGap
+            y = photoEndY + 3.5
           } else {
-            // Side-by-side on the right
-            let px = photoStartX
-            for (const d of photoDims) {
-              try {
-                doc.addImage(d.photo.imageData, 'JPEG', px, startY, d.pW, d.pH, '', 'FAST')
-                doc.setDrawColor(226, 232, 240)
-                doc.setLineWidth(0.2)
-                doc.rect(px, startY, d.pW, d.pH)
-              } catch {}
-              px += d.pW + photoGap
+            // Right-aligned photo layout
+            if (shouldStack) {
+              let currentPy = startY
+              for (const d of photoDims) {
+                const px = (W - margin) - d.pW
+                try {
+                  doc.addImage(d.photo.imageData, 'JPEG', px, currentPy, d.pW, d.pH, '', 'FAST')
+                  doc.setDrawColor(226, 232, 240)
+                  doc.setLineWidth(0.2)
+                  doc.rect(px, currentPy, d.pW, d.pH)
+                } catch {}
+                currentPy += d.pH + photoGap
+              }
+              photoEndY = currentPy - photoGap
+            } else {
+              let px = photoStartX
+              for (const d of photoDims) {
+                try {
+                  doc.addImage(d.photo.imageData, 'JPEG', px, startY, d.pW, d.pH, '', 'FAST')
+                  doc.setDrawColor(226, 232, 240)
+                  doc.setLineWidth(0.2)
+                  doc.rect(px, startY, d.pW, d.pH)
+                } catch {}
+                px += d.pW + photoGap
+              }
+              photoEndY = startY + Math.max(...photoDims.map(d => d.pH))
             }
-            photoEndY = startY + Math.max(...photoDims.map(d => d.pH))
+            y = Math.max(textY, photoEndY) + 3.5
           }
+        } else {
+          y = textY + 3.5
         }
-
-        y = Math.max(textY, photoEndY) + 3.5
 
         // Light separator between items
         doc.setDrawColor(241, 245, 249)
@@ -1320,7 +1488,8 @@ export default function PDFPreview() {
           // When unlicensed/capped: only place pins for items that are actually exported (first 2 observation points total)
           // When licensed: place all pins on this drawing in the current report context
           const itemsOnFp = (isCapped ? itemsToExport : items).filter(i => {
-            if (i.floorPlanUuid !== fp.uuid) return false
+            const hasPinOnThisFp = (i.floorPlanUuid === fp.uuid) || (Array.isArray(i.extraPins) && i.extraPins.some(ep => ep.floorPlanUuid === fp.uuid))
+            if (!hasPinOnThisFp) return false
             if (filterReport !== 'All') {
               const belongs = i.phaseUuid === filterReport || fp.phaseUuid === filterReport || (!fp.phaseUuid && filterReport === phases[0]?.uuid)
               if (!belongs) return false
@@ -1634,6 +1803,7 @@ export default function PDFPreview() {
                     {[
                       { id: 'keyPlans',        label: 'Key Plans' },
                       { id: 'photos',          label: 'Observation Photos' },
+                      { id: 'status',          label: 'Status' },
                       { id: 'priority',        label: 'Priority' },
                       { id: 'trade',           label: 'Category' },
                       { id: 'dueDate',         label: 'Due Date' },
@@ -1672,6 +1842,48 @@ export default function PDFPreview() {
                       )
                     })}
                   </div>
+
+                  {/* Observation Images Placement Option (Below observation notes or on the right side) */}
+                  {exportFields.photos && (
+                    <div className="pt-3.5 mt-3.5 border-t border-gray-150">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div>
+                          <label className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
+                            <ImageIcon size={14} className="text-brand-600" />
+                            <span>Observation Images Placement</span>
+                          </label>
+                          <p className="text-[11px] text-gray-500">
+                            Choose whether observation images appear below observation notes or on the right side
+                          </p>
+                        </div>
+
+                        <div className="inline-flex p-1 bg-gray-100 rounded-xl border border-gray-200 self-start sm:self-auto">
+                          <button
+                            type="button"
+                            onClick={() => handleSetImageLayout('below')}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                              imageLayout === 'below'
+                                ? 'bg-white text-gray-900 shadow-xs ring-1 ring-black/5 font-bold'
+                                : 'text-gray-500 hover:text-gray-800'
+                            }`}
+                          >
+                            <span>Below observation notes</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetImageLayout('right')}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                              imageLayout === 'right'
+                                ? 'bg-white text-gray-900 shadow-xs ring-1 ring-black/5 font-bold'
+                                : 'text-gray-500 hover:text-gray-800'
+                            }`}
+                          >
+                            <span>On the right side</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

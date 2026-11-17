@@ -35,6 +35,7 @@ export const useAppStore = create((set, get) => ({
 
   // Pending new pin (before punch form is saved)
   pendingPin: null,   // { x, y, floorPlanUuid }
+  pendingPinInstanceObs: null, // { obsUuid, itemNumber, floorPlanUuid }
 
   // Company / branding settings
   companyName: '',
@@ -138,6 +139,8 @@ export const useAppStore = create((set, get) => ({
 
   openPunchForm:     (pin = null) => set({ showPunchForm: true,  pendingPin: pin }),
   closePunchForm:    ()           => set({ showPunchForm: false, pendingPin: null, currentPunchItemUuid: null }),
+  setPendingPinInstanceObs: (info) => set({ pendingPinInstanceObs: info }),
+  clearPendingPinInstanceObs: ()   => set({ pendingPinInstanceObs: null }),
 
   openPhotoAnnotator:  () => set({ showPhotoAnnotator: true }),
   closePhotoAnnotator: () => set({ showPhotoAnnotator: false }),

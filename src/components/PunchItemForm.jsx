@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   X, Camera, Mic, MicOff, Trash2, Image as ImageIcon,
   Plus, Check, Edit2, AlertCircle, Tag, ArrowLeft, Lock, Copy,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, MapPin
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -36,7 +36,10 @@ export default function PunchItemForm() {
     currentProjectUuid,
     currentFloorPlanUuid,
     setCurrentPunchItem,
-    photoQuality
+    photoQuality,
+    setPendingPinInstanceObs,
+    navigateToFloorPlan,
+    pinColor,
   } = useAppStore()
 
   const [item,        setItem]        = useState(null)
@@ -400,9 +403,17 @@ export default function PunchItemForm() {
   // Delete the punch item and its pin
   async function handleDeletePin() {
     if (!item) return
-    const confirmed = window.confirm(
-      `Delete Pin #${item.itemNumber} from the key plan?\n\nThis will remove this observation, all notes, and attached photos.`
-    )
+    const totalInstances = 1 + (item.extraPins?.length || 0)
+    let confirmed = false
+    if (totalInstances > 1) {
+      confirmed = window.confirm(
+        `Delete Observation #${item.itemNumber}?\n\nThis observation currently has ${totalInstances} pin instances on key plans.\nDeleting this observation will permanently delete all ${totalInstances} pin instances, notes, and attached photos.\n\nDo you want to proceed?`
+      )
+    } else {
+      confirmed = window.confirm(
+        `Delete Observation #${item.itemNumber}?\n\n⚠️ Warning: This is the LAST remaining pin instance for Observation #${item.itemNumber}.\n\nDeleting it will permanently remove this observation, all notes, and attached photos from the project, and automatically resequence remaining pins.`
+      )
+    }
     if (!confirmed) return
     setDeletingPin(true)
     isSavedRef.current = true
@@ -701,6 +712,47 @@ export default function PunchItemForm() {
     setPhotos(ph => ph.filter(p => p.uuid !== uuid))
   }
 
+  // ── Extra Pin Instances Handling ───────────────────────────────────────────
+  async function handleStartAddPinInstance() {
+    if (!form.notes || !form.notes.trim()) {
+      setError('Please enter Observation Notes first before placing extra pin instances.')
+      return
+    }
+
+    if (listening && recognitionRef.current) {
+      stopVoiceSession()
+    }
+
+    // Save pending form changes
+    const updated = { ...item, ...form }
+    await savePunchItem(updated)
+    isSavedRef.current = true
+
+    const targetFpUuid = item.floorPlanUuid || currentFloorPlanUuid
+    const targetProjUuid = item.projectUuid || currentProjectUuid
+
+    setPendingPinInstanceObs({
+      obsUuid: item.uuid,
+      itemNumber: item.itemNumber,
+      floorPlanUuid: targetFpUuid,
+    })
+
+    if (targetProjUuid && targetFpUuid) {
+      navigateToFloorPlan(targetProjUuid, targetFpUuid)
+    }
+
+    closePunchForm()
+  }
+
+  async function handleDeleteExtraPin(pinId) {
+    if (!window.confirm('Remove this pin instance from the key plan? The observation will remain.')) return
+    const remaining = (item.extraPins || []).filter(p => p.id !== pinId)
+    const updated = { ...item, ...form, extraPins: remaining }
+    await savePunchItem(updated)
+    setItem(updated)
+    itemRef.current = updated
+  }
+
   if (!item) return (
     <ModalOverlay onClose={handleCancel}>
       <div className="bg-white rounded-t-2xl p-8 flex items-center justify-center">
@@ -737,9 +789,25 @@ export default function PunchItemForm() {
                   <ArrowLeft size={20} className="block" />
                 </button>
                 <div className="flex flex-col justify-center min-w-0">
-                  <h1 className="text-xl font-bold tracking-tight leading-tight truncate">
-                    Observation #{item.itemNumber}
-                  </h1>
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-xl font-bold tracking-tight leading-tight truncate">
+                      Observation #{item.itemNumber}
+                    </h1>
+                    <button
+                      type="button"
+                      onClick={handleStartAddPinInstance}
+                      className="liquid-glass-btn p-1.5 rounded-xl text-white hover:bg-white/20 active:scale-95 transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-xs"
+                      title={`Add duplicate Pin #${item.itemNumber} on key plan${(item.extraPins?.length || 0) > 0 ? ` (${(item.extraPins?.length || 0) + 1} pin instances)` : ''}`}
+                      aria-label="Add duplicate pin on key plan"
+                    >
+                      <Plus size={16} strokeWidth={2.5} />
+                    </button>
+                    {(item.extraPins?.length || 0) > 0 && (
+                      <span className="text-[11px] font-semibold bg-white/20 text-white px-2 py-0.5 rounded-full select-none">
+                        {(item.extraPins?.length || 0) + 1} pins
+                      </span>
+                    )}
+                  </div>
                   <p className="text-brand-200 text-xs truncate leading-tight mt-0.5">
                     Edit Observation details and photo record
                   </p>
