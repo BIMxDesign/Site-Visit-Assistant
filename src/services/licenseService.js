@@ -41,9 +41,32 @@ export function getLmfwcConsumerSecret() {
  */
 export function setLmfwcCredentials(key, secret) {
   try {
-    if (key) localStorage.setItem(STORAGE_KEY_CONSUMER_KEY, key.trim())
-    if (secret) localStorage.setItem(STORAGE_KEY_CONSUMER_SECRET, secret.trim())
+    if (key !== undefined) localStorage.setItem(STORAGE_KEY_CONSUMER_KEY, String(key).trim())
+    if (secret !== undefined) localStorage.setItem(STORAGE_KEY_CONSUMER_SECRET, String(secret).trim())
   } catch {}
+}
+
+/**
+ * Clear custom LMFWC API credentials
+ */
+export function clearLmfwcCredentials() {
+  try {
+    localStorage.removeItem(STORAGE_KEY_CONSUMER_KEY)
+    localStorage.removeItem(STORAGE_KEY_CONSUMER_SECRET)
+  } catch {}
+}
+
+/**
+ * Check if custom credentials are saved
+ */
+export function hasCustomLmfwcCredentials() {
+  try {
+    const k = localStorage.getItem(STORAGE_KEY_CONSUMER_KEY)
+    const s = localStorage.getItem(STORAGE_KEY_CONSUMER_SECRET)
+    return Boolean(k && k.trim() && s && s.trim())
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -79,9 +102,11 @@ export function getCandidateBases(inputUrl) {
     bases.push(normalized.replace('://', '://www.'))
   }
 
-  // In local development, prepend local proxy so CORS is 100% bypassed
+  // In local development, prepend local proxy so CORS is 100% bypassed for bimxdesign
   if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    bases.unshift(window.location.origin + '/api-wp')
+    if (normalized.includes('bimxdesign.com')) {
+      bases.unshift(window.location.origin + '/api-wp')
+    }
   }
 
   return [...new Set(bases)]
@@ -252,7 +277,13 @@ export async function testWordPressConnection(customWpUrl, customKey, customSecr
 
         if (resp.status === 401 || resp.status === 403) {
           anyEndpointReached = true
-          lastAuthError = `Authentication failed (HTTP ${resp.status}): WooCommerce rejected the Consumer Key or Secret.\n\nPlease verify in WordPress Admin > WooCommerce > Settings > Advanced > REST API that:\n1. Your API Key exists and matches your Consumer Key and Secret.\n2. The Permissions are set to "Read/Write" (Read-only keys are rejected).`
+          lastAuthError =
+            `Authentication failed (HTTP ${resp.status}): WooCommerce rejected the Consumer Key or Secret.\n\n` +
+            `Troubleshooting Checklist:\n` +
+            `1. Key User Role: In WordPress Admin > WooCommerce > Settings > Advanced > REST API, edit your API key and confirm the "User" field is assigned to an Administrator account (Shop Manager or secondary accounts are rejected with 401).\n` +
+            `2. Permissions: Ensure Permissions are set to "Read/Write" (Read-only keys are rejected).\n` +
+            `3. Match Keys: Confirm the Consumer Key (ck_...) and Consumer Secret (cs_...) match what was generated in WooCommerce.\n` +
+            `4. Server Header: If your host uses Apache/LiteSpeed, ensure HTTP Authorization headers are passed to PHP.`
           break
         }
 
@@ -407,54 +438,90 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
   // Build candidate activation routes across all candidate bases (domain, non-www, and localhost proxy)
   const candidates = []
   for (const base of bases) {
-    // 1. Official LMFWC v2 GET endpoint (Standard documented activation method)
+    // 1. Official LMFWC v2 GET endpoint (Authenticated if keys provided)
+    if (consumerKey && consumerSecret) {
+      candidates.push({
+        label: `LMFWC v2 (GET authenticated) - ${base}`,
+        method: 'GET',
+        url: buildCandidateUrl(base, `/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`, {
+          consumer_key: consumerKey,
+          consumer_secret: consumerSecret,
+          label: projectName || cleanProjId,
+        }),
+      })
+    }
+
+    // 2. Official LMFWC v2 GET endpoint (Public / Client API mode without credentials)
     candidates.push({
-      label: `LMFWC v2 (GET) - ${base}`,
+      label: `LMFWC v2 (GET client) - ${base}`,
       method: 'GET',
       url: buildCandidateUrl(base, `/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`, {
-        consumer_key: consumerKey,
-        consumer_secret: consumerSecret,
         label: projectName || cleanProjId,
       }),
     })
-    // 2. LMFWC v2 POST endpoint
+
+    // 3. LMFWC v2 POST endpoint
+    if (consumerKey && consumerSecret) {
+      candidates.push({
+        label: `LMFWC v2 (POST authenticated) - ${base}`,
+        method: 'POST',
+        url: buildCandidateUrl(base, `/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`, {
+          consumer_key: consumerKey,
+          consumer_secret: consumerSecret,
+        }),
+        body: JSON.stringify({
+          projectUuid: cleanProjId,
+          projectName: projectName,
+          label: projectName || cleanProjId,
+        }),
+      })
+    }
+
     candidates.push({
-      label: `LMFWC v2 (POST) - ${base}`,
+      label: `LMFWC v2 (POST client) - ${base}`,
       method: 'POST',
-      url: buildCandidateUrl(base, `/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`, {
-        consumer_key: consumerKey,
-        consumer_secret: consumerSecret,
-      }),
+      url: buildCandidateUrl(base, `/wp-json/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`, {}),
       body: JSON.stringify({
         projectUuid: cleanProjId,
         projectName: projectName,
         label: projectName || cleanProjId,
       }),
     })
-    // 3. LMFWC v1 GET endpoint
+
+    // 4. LMFWC v1 GET endpoint
+    if (consumerKey && consumerSecret) {
+      candidates.push({
+        label: `LMFWC v1 (GET authenticated) - ${base}`,
+        method: 'GET',
+        url: buildCandidateUrl(base, `/wp-json/lmfwc/v1/licenses/activate/${encodeURIComponent(cleanKey)}`, {
+          consumer_key: consumerKey,
+          consumer_secret: consumerSecret,
+          label: projectName || cleanProjId,
+        }),
+      })
+    }
     candidates.push({
-      label: `LMFWC v1 (GET) - ${base}`,
+      label: `LMFWC v1 (GET client) - ${base}`,
       method: 'GET',
       url: buildCandidateUrl(base, `/wp-json/lmfwc/v1/licenses/activate/${encodeURIComponent(cleanKey)}`, {
-        consumer_key: consumerKey,
-        consumer_secret: consumerSecret,
         label: projectName || cleanProjId,
       }),
     })
-    // 4. Plain permalinks fallback
+
+    // 5. Plain permalinks fallback
     candidates.push({
       label: `LMFWC v2 Plain Query (GET) - ${base}`,
       method: 'GET',
       url: buildCandidateUrl(base, '', {
         rest_route: `/lmfwc/v2/licenses/activate/${encodeURIComponent(cleanKey)}`,
-        consumer_key: consumerKey,
-        consumer_secret: consumerSecret,
+        ...(consumerKey && consumerSecret ? { consumer_key: consumerKey, consumer_secret: consumerSecret } : {}),
         label: projectName || cleanProjId,
       }),
     })
   }
 
   let lastError = null
+  let lastAuthError = null
   let allRouteNotFound = true
 
   for (const cand of candidates) {
@@ -473,8 +540,8 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
         body: cand.body || undefined,
       })
 
-      // 2. If 401 or 403, retry with Authorization: Basic header (for hosts that strictly require header auth)
-      if ((resp.status === 401 || resp.status === 403) && consumerKey && consumerSecret) {
+      // 2. If 401 or 403 and this was an authenticated candidate, retry with Authorization: Basic header
+      if ((resp.status === 401 || resp.status === 403) && cand.url.includes('consumer_key') && consumerKey && consumerSecret) {
         const authHeaders = { ...headers }
         try {
           authHeaders['Authorization'] = 'Basic ' + btoa(`${consumerKey}:${consumerSecret}`)
@@ -518,13 +585,17 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
       allRouteNotFound = false
 
       if (resp.status === 401 || resp.status === 403) {
-        throw new Error(
+        lastAuthError = new Error(
           `WordPress API authorization failed (${resp.status}).\n\n` +
-          `To fix this in your WordPress store:\n` +
-          `1. Go to WordPress Admin > WooCommerce > Settings > Advanced > REST API.\n` +
-          `2. Check your API Key permissions — it MUST be set to "Read/Write" (keys with "Read" only will fail on activation).\n` +
-          `3. Copy your Consumer Key (ck_...) and Consumer Secret (cs_...) and enter them in Site Visit Assistant Settings > About tab under WordPress Store Connection.`
+          `Why this happens & how to fix it:\n` +
+          `1. Key User Role (Most Common): In WordPress Admin > WooCommerce > Settings > Advanced > REST API, edit your API key and verify that the "User" field is assigned to an Administrator account. If assigned to Shop Manager or Customer, WordPress rejects activation with 401.\n` +
+          `2. Read/Write Permission: Ensure Permissions are set to "Read/Write" (Read-only keys cannot activate licenses).\n` +
+          `3. Save Keys in Site Visit Assistant: In Settings > About tab (or via Store Settings below), paste your Consumer Key (ck_...) and Consumer Secret (cs_...) and click Save.\n` +
+          `4. Enable Client Activation: In WordPress Admin > WooCommerce > Settings > License Manager, ensure "Allow client activation" or "Client API" is enabled.\n` +
+          `5. Offline / Demo: You can also use OFFLINE-KEY to test without connecting to WordPress.`
         )
+        // Continue to try other candidates (such as public unauthenticated activation)
+        continue
       } else if (resp.status === 404 || (errorMsg && errorMsg.toLowerCase().includes('not exist'))) {
         throw new Error(`The license key "${cleanKey}" does not exist in your WooCommerce store. Please verify the key.`)
       } else if (
@@ -547,7 +618,6 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
         candErr.message &&
         (candErr.message.includes('does not exist') ||
           candErr.message.includes('already activated') ||
-          candErr.message.includes('authorization failed') ||
           candErr.message.includes('inactive') ||
           candErr.message.includes('limit') ||
           candErr.message.includes('maximum activations') ||
@@ -558,6 +628,11 @@ export async function activateProjectLicense(projectUuid, licenseKey, projectNam
       }
       lastError = candErr
     }
+  }
+
+  // If no candidate succeeded, check if we hit an authorization failure
+  if (!responseData && lastAuthError) {
+    throw lastAuthError
   }
 
   // If no candidate succeeded

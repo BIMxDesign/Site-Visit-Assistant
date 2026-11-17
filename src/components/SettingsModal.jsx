@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy, Sparkles, X, Camera,
   ScrollText, FileDown, Archive, FileSpreadsheet, ChevronRight, Package,
   Cloud, CloudUpload, CloudDownload, Share2, Laptop, HardDrive, Wifi, WifiOff,
-  Flame, Zap, Globe, Database
+  Flame, Zap, Globe, Database, Eye, EyeOff, ExternalLink
 } from 'lucide-react'
 import { usePwa } from '../utils/pwa'
 import {
@@ -40,7 +40,17 @@ import LicenseActivationModal from './LicenseActivationModal'
 import DeleteProjectModal from './DeleteProjectModal'
 import {
   getLicensedProjectUuids,
-  getCachedLicenses
+  getCachedLicenses,
+  getWordPressUrl,
+  setWordPressUrl,
+  getLmfwcConsumerKey,
+  getLmfwcConsumerSecret,
+  setLmfwcCredentials,
+  clearLmfwcCredentials,
+  testWordPressConnection,
+  DEFAULT_WP_URL,
+  DEFAULT_CONSUMER_KEY,
+  DEFAULT_CONSUMER_SECRET,
 } from '../services/licenseService'
 import { THEME_PRESETS, applyThemeColor, DEFAULT_THEME_COLOR, PIN_COLOR_PRESETS, applyPinColor, DEFAULT_PIN_COLOR } from '../utils/theme'
 import { FONT_OPTIONS, applyAppFont, DEFAULT_FONT_ID } from '../utils/font'
@@ -134,6 +144,83 @@ export default function SettingsModal() {
   async function handleDisconnectCloudFolder() {
     await disconnectCloudFolder()
     setCloudFolder(null)
+  }
+
+  // Automatic Periodic Cloud Backup state (Daily / Weekly / Monthly)
+  const [autoBackupConfig, setAutoBackupConfig] = useState({
+    frequency: 'off',
+    lastTime: null,
+    lastStatus: null,
+    nextDueTime: null,
+    isDue: false,
+  })
+  const [autoBackupLoading, setAutoBackupLoading] = useState(false)
+  const [autoBackupFeedback, setAutoBackupFeedback] = useState('')
+
+  const reloadAutoBackupConfig = useCallback(async () => {
+    try {
+      const cfg = await getAutoBackupConfig()
+      setAutoBackupConfig(cfg)
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    reloadAutoBackupConfig()
+    const handleUpdate = () => reloadAutoBackupConfig()
+    window.addEventListener('sitepunch-auto-backup-updated', handleUpdate)
+    return () => window.removeEventListener('sitepunch-auto-backup-updated', handleUpdate)
+  }, [reloadAutoBackupConfig])
+
+  async function handleSelectFrequency(freqId) {
+    if (freqId !== 'off' && !cloudFolder) {
+      try {
+        const selected = await selectCloudSyncFolder()
+        if (selected) {
+          setCloudFolder(selected)
+        } else {
+          return
+        }
+      } catch (err) {
+        alert(`Folder selection needed for automatic cloud backups: ${err.message}`)
+        return
+      }
+    }
+
+    await setAutoBackupFrequency(freqId)
+    await reloadAutoBackupConfig()
+    setAutoBackupFeedback(`Automatic periodic backup set to ${AUTO_BACKUP_FREQUENCIES[freqId]?.label || freqId}`)
+    setTimeout(() => setAutoBackupFeedback(''), 4000)
+  }
+
+  async function handleRunAutoBackupNow() {
+    if (!cloudFolder) {
+      alert('Please connect your OneDrive or Google Drive folder first.')
+      return
+    }
+    setAutoBackupLoading(true)
+    setAutoBackupFeedback('')
+    try {
+      const res = await executePeriodicAutoBackup(getAllProjectsBackupBlob)
+      if (res.status === 'success') {
+        setAutoBackupFeedback(`✅ Successfully pushed backup to ${res.folderName}!`)
+      } else if (res.status === 'needs_permission') {
+        const granted = await requestCloudFolderPermission()
+        if (granted) {
+          const retry = await executePeriodicAutoBackup(getAllProjectsBackupBlob)
+          if (retry.status === 'success') {
+            setAutoBackupFeedback(`✅ Successfully pushed backup to ${retry.folderName}!`)
+          }
+        }
+      } else {
+        alert(`Auto-backup notice: ${res.message}`)
+      }
+      await reloadAutoBackupConfig()
+    } catch (err) {
+      alert(`Auto-backup failed: ${err.message}`)
+    } finally {
+      setAutoBackupLoading(false)
+      setTimeout(() => setAutoBackupFeedback(''), 5000)
+    }
   }
 
   // Firebase Live Sync Configuration state
@@ -255,6 +342,51 @@ export default function SettingsModal() {
   function reloadLicenses() {
     setLicensedProjectSet(getLicensedProjectUuids())
     setActiveLicenses(getCachedLicenses())
+  }
+
+  // --- WordPress Store Connection state (About tab) ---
+  const [wpUrl, setWpUrl] = useState(() => getWordPressUrl())
+  const [wpConsumerKey, setWpConsumerKey] = useState(() => getLmfwcConsumerKey())
+  const [wpConsumerSecret, setWpConsumerSecret] = useState(() => getLmfwcConsumerSecret())
+  const [showWpSecret, setShowWpSecret] = useState(false)
+  const [wpTesting, setWpTesting] = useState(false)
+  const [wpTestResult, setWpTestResult] = useState(null)
+  const [wpSaveSuccess, setWpSaveSuccess] = useState(false)
+  const [showWpTroubleshoot, setShowWpTroubleshoot] = useState(false)
+
+  async function handleTestWpConnection() {
+    setWpTesting(true)
+    setWpTestResult(null)
+    try {
+      const res = await testWordPressConnection(wpUrl, wpConsumerKey, wpConsumerSecret)
+      setWpTestResult(res)
+    } catch (err) {
+      setWpTestResult({
+        success: false,
+        message: err.message || 'Failed to connect to WordPress server.',
+      })
+    } finally {
+      setWpTesting(false)
+    }
+  }
+
+  function handleSaveWpCredentials() {
+    setWordPressUrl(wpUrl)
+    setLmfwcCredentials(wpConsumerKey, wpConsumerSecret)
+    setWpSaveSuccess(true)
+    setTimeout(() => setWpSaveSuccess(false), 3000)
+  }
+
+  function handleResetWpDefaults() {
+    clearLmfwcCredentials()
+    setWordPressUrl(DEFAULT_WP_URL)
+    setWpUrl(DEFAULT_WP_URL)
+    setWpConsumerKey(DEFAULT_CONSUMER_KEY)
+    setWpConsumerSecret(DEFAULT_CONSUMER_SECRET)
+    setWpTestResult({
+      success: true,
+      message: 'Reset WordPress store connection and API credentials to default values.',
+    })
   }
 
   async function handleSelectPhotoQuality(qualityId) {
@@ -1310,6 +1442,92 @@ export default function SettingsModal() {
                 )
               )}
 
+              {/* Automatic Periodic Backup (Daily / Weekly / Monthly) */}
+              <div className="bg-white/90 backdrop-blur-xs border border-blue-200/90 rounded-xl p-3.5 space-y-2.5 shadow-2xs">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <Clock size={16} className="text-blue-600 flex-shrink-0" />
+                    <div>
+                      <h5 className="font-bold text-gray-900 text-xs leading-tight">
+                        Automatic Periodic Cloud Backup
+                      </h5>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        Automatically push complete backup files into your connected cloud drive
+                      </p>
+                    </div>
+                  </div>
+
+                  {autoBackupConfig.frequency !== 'off' && cloudFolder && (
+                    <button
+                      type="button"
+                      onClick={handleRunAutoBackupNow}
+                      disabled={autoBackupLoading}
+                      className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+                      title="Trigger an immediate automatic backup push right now"
+                    >
+                      {autoBackupLoading ? <Spinner /> : <RefreshCw size={11} className={autoBackupLoading ? 'animate-spin' : ''} />}
+                      <span>Push Backup Now</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Frequency Selector Buttons: Off, Daily, Weekly, Monthly */}
+                <div className="grid grid-cols-4 gap-1.5 pt-1">
+                  {Object.values(AUTO_BACKUP_FREQUENCIES).map(f => {
+                    const isSelected = autoBackupConfig.frequency === f.id
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => handleSelectFrequency(f.id)}
+                        className={`py-2 px-2 rounded-xl text-xs font-bold transition-all text-center flex flex-col items-center justify-center cursor-pointer border ${
+                          isSelected
+                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                            : 'bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200'
+                        }`}
+                      >
+                        <span className="leading-tight">{f.label.split(' ')[0]}</span>
+                        <span className={`text-[10px] font-normal leading-tight mt-0.5 ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
+                          {f.id === 'off' ? 'Manual' : f.description}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Status Indicator & Next Scheduled Time */}
+                {autoBackupConfig.frequency !== 'off' ? (
+                  <div className="pt-1 text-[11px] text-gray-600 flex items-center justify-between gap-2 flex-wrap border-t border-gray-100">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>
+                        Auto-pushing <strong>{autoBackupConfig.frequency}</strong> to{' '}
+                        <strong className="text-gray-900">{cloudFolder?.name || 'OneDrive / Google Drive'}</strong>
+                      </span>
+                    </div>
+
+                    <div className="text-gray-400 text-[10px]">
+                      {autoBackupConfig.lastTime ? (
+                        <span>Last pushed: {new Date(autoBackupConfig.lastTime).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                      ) : (
+                        <span className="text-blue-600 font-medium">Scheduled to run automatically</span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-gray-400 italic pt-0.5">
+                    Select Daily, Weekly, or Monthly to enable background cloud backup pushes.
+                  </p>
+                )}
+
+                {autoBackupFeedback && (
+                  <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-[11px] font-semibold flex items-center gap-1.5 animate-fade-in">
+                    <CheckCircle size={13} className="text-emerald-600 flex-shrink-0" />
+                    <span>{autoBackupFeedback}</span>
+                  </div>
+                )}
+              </div>
+
               <div className="bg-white/80 backdrop-blur-xs rounded-xl p-3 border border-blue-100 text-[11px] text-gray-600 flex items-start gap-2 leading-relaxed">
                 <ShieldCheck size={15} className="text-emerald-600 mt-0.5 flex-shrink-0" />
                 <span>
@@ -1961,6 +2179,193 @@ export default function SettingsModal() {
                     When you export and import the project onto your iPad, iPhone, or PC, the license transfers automatically.
                   </p>
                 </div>
+              </div>
+            </div>
+
+            {/* WordPress Store & WooCommerce REST API Connection Card */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm space-y-5">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100 flex-wrap gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-brand-50 text-brand-700 rounded-xl">
+                    <Globe size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-gray-900">WordPress Store Connection &amp; API Keys</h4>
+                    <p className="text-xs text-gray-400">WooCommerce REST API &amp; License Manager (LMFWC) settings</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={wpUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  >
+                    <span>Visit Store</span>
+                    <ExternalLink size={12} />
+                  </a>
+                </div>
+              </div>
+
+              {/* Form Fields */}
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-gray-700 mb-1 flex items-center justify-between">
+                    <span>WordPress Store URL</span>
+                    <span className="text-[10px] text-gray-400 font-normal">e.g. https://www.bimxdesign.com</span>
+                  </label>
+                  <input
+                    type="url"
+                    value={wpUrl}
+                    onChange={e => {
+                      setWpUrl(e.target.value)
+                      setWpTestResult(null)
+                    }}
+                    placeholder="https://www.bimxdesign.com"
+                    className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs text-gray-900 font-mono focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700 mb-1 block">
+                      WooCommerce Consumer Key (<span className="font-mono text-gray-500">ck_...</span>)
+                    </label>
+                    <input
+                      type="text"
+                      value={wpConsumerKey}
+                      onChange={e => {
+                        setWpConsumerKey(e.target.value)
+                        setWpTestResult(null)
+                      }}
+                      placeholder="ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs text-gray-900 font-mono focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700 mb-1 block">
+                      WooCommerce Consumer Secret (<span className="font-mono text-gray-500">cs_...</span>)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showWpSecret ? 'text' : 'password'}
+                        value={wpConsumerSecret}
+                        onChange={e => {
+                          setWpConsumerSecret(e.target.value)
+                          setWpTestResult(null)
+                        }}
+                        placeholder="cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                        className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 pr-10 text-xs text-gray-900 font-mono focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowWpSecret(!showWpSecret)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+                        title={showWpSecret ? 'Hide Secret' : 'Show Secret'}
+                      >
+                        {showWpSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Test Result Banner */}
+              {wpTestResult && (
+                <div
+                  className={`p-4 rounded-xl border text-xs whitespace-pre-line leading-relaxed ${
+                    wpTestResult.success
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-amber-50 border-amber-200 text-amber-900'
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5">
+                    {wpTestResult.success ? (
+                      <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                    )}
+                    <span className="flex-1 font-medium">{wpTestResult.message}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-between pt-2 border-t border-gray-100 flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestWpConnection}
+                    disabled={wpTesting}
+                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 text-xs font-semibold rounded-xl flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    {wpTesting ? <Spinner /> : <RefreshCw size={13} />}
+                    <span>{wpTesting ? 'Testing Connection…' : 'Test Store Connection'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetWpDefaults}
+                    className="px-3 py-2 text-gray-400 hover:text-gray-600 text-xs font-medium transition-colors cursor-pointer"
+                    title="Reset to default store settings"
+                  >
+                    Reset Defaults
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveWpCredentials}
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all shadow-xs cursor-pointer"
+                  style={{ background: 'var(--brand-button, #a40e26)' }}
+                >
+                  {wpSaveSuccess ? <Check size={14} /> : null}
+                  <span>{wpSaveSuccess ? 'Credentials Saved!' : 'Save Store Credentials'}</span>
+                </button>
+              </div>
+
+              {/* Step-by-Step Troubleshooting Guide for 401 & REST API */}
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowWpTroubleshoot(!showWpTroubleshoot)}
+                  className="w-full flex items-center justify-between p-3.5 bg-gray-50 hover:bg-gray-100/80 rounded-xl text-left border border-gray-200/70 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 text-xs font-bold text-gray-800">
+                    <HelpCircle size={15} className="text-brand-600" />
+                    <span>How to fix "WordPress API authorization failed (401)"</span>
+                  </div>
+                  {showWpTroubleshoot ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+                </button>
+
+                {showWpTroubleshoot && (
+                  <div className="mt-2 p-4 bg-gray-50 border border-gray-200 rounded-xl space-y-3 text-xs text-gray-600 leading-relaxed animate-fade-in">
+                    <p className="font-semibold text-gray-800">
+                      If your WooCommerce key permissions are already set to "Read/Write" and you still get HTTP 401, check these critical WordPress requirements:
+                    </p>
+                    <ol className="list-decimal pl-4 space-y-2 text-[11.5px]">
+                      <li>
+                        <strong className="text-gray-800">Key User Role MUST be Administrator:</strong> In WordPress Admin &gt; WooCommerce &gt; Settings &gt; Advanced &gt; REST API, edit your API key. Confirm the <code className="bg-gray-200 px-1 py-0.5 rounded text-gray-800">User</code> assigned to the key is an <strong>Administrator</strong>. If the user is set to a "Shop Manager", "Customer", or "Editor", WooCommerce blocks plugin licensing endpoints and throws 401.
+                      </li>
+                      <li>
+                        <strong className="text-gray-800">Key Permissions:</strong> The key permissions must be set to <strong>Read/Write</strong>. Keys set to "Read" will fail on activation.
+                      </li>
+                      <li>
+                        <strong className="text-gray-800">Save Consumer Key &amp; Secret:</strong> Copy the Consumer Key (<code className="bg-gray-200 px-1 py-0.5 rounded text-gray-800">ck_...</code>) and Consumer Secret (<code className="bg-gray-200 px-1 py-0.5 rounded text-gray-800">cs_...</code>) from WooCommerce into the fields above and click <strong>Save Store Credentials</strong>.
+                      </li>
+                      <li>
+                        <strong className="text-gray-800">LMFWC Client Activation (Recommended):</strong> In WordPress Admin &gt; WooCommerce &gt; Settings &gt; License Manager (or LMFWC menu), check if "Allow client/public activation" or "Client API" is enabled. When enabled, client apps can activate keys directly without exposing admin credentials.
+                      </li>
+                      <li>
+                        <strong className="text-gray-800">Apache / FastCGI Authorization Header:</strong> Some shared web hosts (cPanel, LiteSpeed, FastCGI) strip the HTTP <code className="bg-gray-200 px-1 py-0.5 rounded text-gray-800">Authorization</code> header before it reaches WordPress. Site Visit Assistant automatically sends query parameters to bypass this, but enabling client activation in LMFWC is the cleanest solution.
+                      </li>
+                      <li>
+                        <strong className="text-gray-800">Offline / Test Keys:</strong> You can always test or work on-site without internet by entering <code className="bg-gray-200 px-1 py-0.5 rounded text-gray-800 font-mono">OFFLINE-KEY</code> or <code className="bg-gray-200 px-1 py-0.5 rounded text-gray-800 font-mono">TEST-KEY</code> in the license activation modal.
+                      </li>
+                    </ol>
+                  </div>
+                )}
               </div>
             </div>
 
