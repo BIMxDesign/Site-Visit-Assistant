@@ -805,52 +805,62 @@ export default function FloorPlanView() {
             })
 
             return (
-              <div
-                className="liquid-glass-surface rounded-2xl p-1.5 shadow-2xl z-60"
-                style={{
-                  position: 'absolute', left: 0, top: '115%',
-                  minWidth: 240, maxWidth: 320,
-                }}
-              >
-                <div style={{ padding: '8px 12px', fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                  Switch Key Plan
+              <>
+                {/* Click-outside backdrop to dismiss dropdown */}
+                <div
+                  className="fixed inset-0 z-50 cursor-default"
+                  onClick={() => setShowFpMenu(false)}
+                />
+
+                <div
+                  className="bg-white rounded-2xl p-2 shadow-2xl z-60 border border-gray-200 animate-fade-in"
+                  style={{
+                    position: 'absolute', left: 0, top: '115%',
+                    minWidth: 260, maxWidth: 340,
+                    background: '#ffffff',
+                    boxShadow: '0 20px 35px -5px rgba(0, 0, 0, 0.4), 0 10px 15px -5px rgba(0, 0, 0, 0.25)',
+                  }}
+                >
+                  <div style={{ padding: '6px 10px 8px', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Switch Key Plan
+                  </div>
+                  <div style={{ maxHeight: 260, overflowY: 'auto' }} className="space-y-1">
+                    {currentPhase && (
+                      <div style={{
+                        padding: '6px 10px', background: '#f1f5f9', borderRadius: 8,
+                        fontSize: 10, fontWeight: 700, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em',
+                        display: 'flex', alignItems: 'center', gap: 6
+                      }}>
+                        <ClipboardList size={12} className="text-brand-600 flex-shrink-0" />
+                        <span className="truncate">{currentPhase.name}</span>
+                      </div>
+                    )}
+                    {currentPhaseFps.map(f => (
+                      <button
+                        key={f.uuid}
+                        onClick={() => {
+                          navigateToFloorPlan(currentProjectUuid, f.uuid, f.phaseUuid || currentPhaseUuid)
+                          setShowFpMenu(false)
+                        }}
+                        className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between cursor-pointer transition-colors hover:bg-gray-100 active:bg-gray-200"
+                        style={{
+                          background: f.uuid === currentFloorPlanUuid ? 'var(--brand-50, #eff6ff)' : 'transparent',
+                          color:      f.uuid === currentFloorPlanUuid ? 'var(--brand-color, #1d4ed8)' : '#0f172a',
+                          fontWeight: f.uuid === currentFloorPlanUuid ? 700 : 600,
+                        }}
+                      >
+                        <span className="truncate">{f.name}</span>
+                        {f.uuid === currentFloorPlanUuid && <Check size={14} className="text-brand-600 flex-shrink-0 ml-2" />}
+                      </button>
+                    ))}
+                    {currentPhaseFps.length === 0 && (
+                      <div style={{ padding: '12px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
+                        No other key plans in this site visit
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div style={{ maxHeight: 240, overflowY: 'auto' }} className="space-y-0.5">
-                  {currentPhase && (
-                    <div style={{
-                      padding: '6px 12px', background: 'rgba(255, 255, 255, 0.5)', borderRadius: 8,
-                      fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em',
-                      display: 'flex', alignItems: 'center', gap: 5
-                    }}>
-                      <ClipboardList size={11} className="text-brand-600 flex-shrink-0" />
-                      <span className="truncate">{currentPhase.name}</span>
-                    </div>
-                  )}
-                  {currentPhaseFps.map(f => (
-                    <button
-                      key={f.uuid}
-                      onClick={() => {
-                        navigateToFloorPlan(currentProjectUuid, f.uuid, f.phaseUuid || currentPhaseUuid)
-                        setShowFpMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between cursor-pointer transition-colors"
-                      style={{
-                        background: f.uuid === currentFloorPlanUuid ? 'var(--brand-50, #eff6ff)' : 'transparent',
-                        color:      f.uuid === currentFloorPlanUuid ? 'var(--brand-color, #1d4ed8)' : '#1e293b',
-                        fontWeight: f.uuid === currentFloorPlanUuid ? 700 : 500,
-                      }}
-                    >
-                      <span className="truncate">{f.name}</span>
-                      {f.uuid === currentFloorPlanUuid && <Check size={14} className="text-brand-600 flex-shrink-0 ml-2" />}
-                    </button>
-                  ))}
-                  {currentPhaseFps.length === 0 && (
-                    <div style={{ padding: '12px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
-                      No other key plans in this site visit
-                    </div>
-                  )}
-                </div>
-              </div>
+              </>
             )
           })()}
         </div>
