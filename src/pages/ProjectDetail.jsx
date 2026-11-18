@@ -2406,36 +2406,39 @@ function FloorPlanCard({
         </p>
       </div>
 
-      {/* Image Preview on right side */}
-      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center">
-        {fp.imageData
-          ? <img src={fp.imageData} alt={fp.name} className="w-full h-full object-cover pointer-events-none" />
-          : <FileImage size={24} className="text-gray-400" />
-        }
-      </div>
+      {/* Right Column: Key Plan Preview moved UP, with Edit & Delete below image on mobile */}
+      <div className="flex flex-col sm:flex-row items-center gap-1.5 sm:gap-2 flex-shrink-0 self-start sm:self-center">
+        {/* Image Preview on right side */}
+        <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center">
+          {fp.imageData
+            ? <img src={fp.imageData} alt={fp.name} className="w-full h-full object-cover pointer-events-none" />
+            : <FileImage size={24} className="text-gray-400" />
+          }
+        </div>
 
-      {/* Action buttons: Rename, Delete */}
-      <div className="flex items-center gap-1 flex-shrink-0">
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onRename(fp)
-          }}
-          className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer"
-          title="Edit key plan"
-        >
-          <Edit2 size={15} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete(fp.uuid, fp.name)
-          }}
-          className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-600 flex items-center justify-center cursor-pointer"
-          title="Delete key plan"
-        >
-          <Trash2 size={15} />
-        </button>
+        {/* Action buttons: Rename, Delete */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onRename(fp)
+            }}
+            className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer"
+            title="Edit key plan"
+          >
+            <Edit2 size={15} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(fp.uuid, fp.name)
+            }}
+            className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 flex items-center justify-center cursor-pointer"
+            title="Delete key plan"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -2542,80 +2545,57 @@ function PunchItemRow({
           {fullTitle}
         </h4>
 
-        {/* Badges and Phone Actions Row below Title */}
-        <div className="flex items-center justify-between gap-1.5 mt-1.5 flex-wrap">
-          <div className="flex gap-1.5 flex-wrap items-center">
-            <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="sm" />
-            {item.priority && (
-              <span className={`text-xs px-2 py-0.5 rounded-full font-bold shadow-2xs ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
-                {item.priority}
-              </span>
-            )}
-            {item.trade && <span className="text-xs text-gray-500 font-semibold">{item.trade}</span>}
-            {floorPlan && (
-              <span className="text-xs text-gray-400 flex items-center gap-1 font-medium">
-                • {showPhase && phase ? `${phase.name} › ` : ''}{floorPlan.name}
-              </span>
-            )}
-          </div>
-
-          {/* Action buttons slid down below the title for phone view (<sm) */}
-          <div className="flex sm:hidden items-center gap-1 flex-shrink-0 ml-auto">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                if (onEdit) onEdit()
-                else if (onClick) onClick()
-              }}
-              className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
-              title="Edit observation"
-            >
-              <Edit2 size={15} />
-            </button>
-            <button
-              type="button"
-              onClick={e => { e.stopPropagation(); onDelete() }}
-              className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 flex items-center justify-center cursor-pointer transition-colors"
-              title="Delete punch item"
-            >
-              <Trash2 size={15} />
-            </button>
-          </div>
+        {/* Badges Row below Title */}
+        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+          <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="sm" />
+          {item.priority && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-bold shadow-2xs ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
+              {item.priority}
+            </span>
+          )}
+          {item.trade && <span className="text-xs text-gray-500 font-semibold">{item.trade}</span>}
+          {floorPlan && (
+            <span className="text-xs text-gray-400 flex items-center gap-1 font-medium">
+              • {showPhase && phase ? `${phase.name} › ` : ''}{floorPlan.name}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Observation Photo Thumbnail on right side */}
-      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center self-center">
-        {itemPhoto ? (
-          <img src={itemPhoto} alt={item.title || `Observation #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
-        ) : (
-          <Camera size={20} className="text-gray-300" />
-        )}
-      </div>
+      {/* Right Column: Photo Thumbnail moved UP, with Edit & Delete below image on mobile */}
+      <div className="flex flex-col sm:flex-row items-center gap-1.5 sm:gap-2 flex-shrink-0 self-start sm:self-center">
+        {/* Observation Photo Thumbnail */}
+        <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center">
+          {itemPhoto ? (
+            <img src={itemPhoto} alt={item.title || `Observation #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
+          ) : (
+            <Camera size={20} className="text-gray-300" />
+          )}
+        </div>
 
-      {/* Desktop Action buttons: Edit, Delete (hidden on phone, visible on sm+) */}
-      <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            if (onEdit) onEdit()
-            else if (onClick) onClick()
-          }}
-          className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
-          title="Edit observation"
-        >
-          <Edit2 size={15} />
-        </button>
-        <button
-          type="button"
-          onClick={e => { e.stopPropagation(); onDelete() }}
-          className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 flex items-center justify-center cursor-pointer transition-colors"
-          title="Delete punch item"
-        >
-          <Trash2 size={15} />
-        </button>
+        {/* Action buttons: Edit, Delete (below image on mobile, to the right on sm+) */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (onEdit) onEdit()
+              else if (onClick) onClick()
+            }}
+            className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
+            title="Edit observation"
+          >
+            <Edit2 size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); onDelete() }}
+            className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 flex items-center justify-center cursor-pointer transition-colors"
+            title="Delete punch item"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
       </div>
     </div>
   )

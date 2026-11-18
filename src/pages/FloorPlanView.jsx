@@ -1739,70 +1739,43 @@ export default function FloorPlanView() {
                         </div>
                       </div>
 
-                      {/* Photo Thumbnail on right side */}
-                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center self-center">
-                        {photo ? (
-                          <img src={photo} alt={`Pin #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
-                        ) : (
-                          <Camera size={20} className="text-gray-300" />
-                        )}
-                      </div>
+                      {/* Right Column: Photo Thumbnail moved UP, with Edit & Delete below image on mobile */}
+                      <div className="flex flex-col sm:flex-row items-center gap-1.5 sm:gap-2 flex-shrink-0 self-start sm:self-center">
+                        {/* Observation Photo Thumbnail */}
+                        <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center">
+                          {photo ? (
+                            <img src={photo} alt={`Pin #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
+                          ) : (
+                            <Camera size={20} className="text-gray-300" />
+                          )}
+                        </div>
 
-                      {/* Desktop Action Buttons: Edit, Delete (hidden on mobile, shown on sm+) */}
-                      <div className="hidden sm:flex items-center gap-1 flex-shrink-0 self-center">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setCurrentPunchItem(item.uuid)
-                            openPunchForm()
-                          }}
-                          className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
-                          title="Edit observation"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleDeleteItem(item)
-                          }}
-                          className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-600 flex items-center justify-center cursor-pointer transition-colors"
-                          title="Delete observation (auto-resequences pins)"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Mobile Action Footer Bar: Touch-friendly Edit, Delete (strictly on phones < sm) */}
-                    <div className="flex sm:hidden items-center justify-end pt-1.5 border-t border-gray-150/80 mt-1 pl-10 pr-0.5 gap-2">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setCurrentPunchItem(item.uuid)
-                            openPunchForm()
-                          }}
-                          className="p-1 px-2.5 rounded-lg border border-gray-250 bg-white text-gray-700 hover:text-brand-700 flex items-center gap-1 text-[11px] font-semibold cursor-pointer active:bg-gray-100 shadow-2xs"
-                          title="Edit observation"
-                        >
-                          <Edit2 size={13} />
-                          <span>Edit</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleDeleteItem(item)
-                          }}
-                          className="p-1 px-2 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 flex items-center gap-1 text-[11px] font-semibold cursor-pointer active:bg-red-100 shadow-2xs"
-                          title="Delete observation"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                        {/* Action Buttons: Edit, Delete */}
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCurrentPunchItem(item.uuid)
+                              openPunchForm()
+                            }}
+                            className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
+                            title="Edit observation"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteItem(item)
+                            }}
+                            className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-600 flex items-center justify-center cursor-pointer transition-colors"
+                            title="Delete observation (auto-resequences pins)"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
