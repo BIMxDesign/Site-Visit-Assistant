@@ -103,6 +103,7 @@ export default function PDFPreview() {
 
     const defaults = {
       keyPlans: true, // Key Plans
+      keyPlanSnips: true, // Key Plan snip around pin next to observation item
       photos:   true, // Observation photos
       status:   true, // Status
       priority: true, // Priority level (High, Medium, Low)
@@ -112,6 +113,7 @@ export default function PDFPreview() {
       reportCreatedBy: true, // Report Created By
       attendees: true, // List of Attendees
       photosOnRight: initialImageLayout === 'right', // Observation Images on Right Side (true = on right side, false = below notes)
+      reportAsTable: false, // Report as Table (Table layout: Category, Description, Photos, Drawing location)
     }
     try {
       const saved = localStorage.getItem('sitepunch_export_fields')
@@ -119,6 +121,12 @@ export default function PDFPreview() {
         const parsed = JSON.parse(saved)
         if (parsed.photosOnRight === undefined) {
           parsed.photosOnRight = initialImageLayout === 'right'
+        }
+        if (parsed.reportAsTable === undefined) {
+          parsed.reportAsTable = false
+        }
+        if (parsed.keyPlanSnips === undefined) {
+          parsed.keyPlanSnips = true
         }
         return { ...defaults, ...parsed }
       }
@@ -152,29 +160,34 @@ export default function PDFPreview() {
   }
 
   const handleSelectAllFields = () => {
-    const all = {
-      keyPlans: true,
-      photos:   true,
-      status:   true,
-      priority: true,
-      trade:    true,
-      dueDate:  true,
-      notes:    true,
-      reportCreatedBy: true,
-      attendees: true,
-      photosOnRight: true,
-    }
-    setExportFields(all)
-    setImageLayout('right')
-    try {
-      localStorage.setItem('sitepunch_pdf_image_layout', 'right')
-      localStorage.setItem('sitepunch_export_fields', JSON.stringify(all))
-    } catch {}
+    setExportFields(prev => {
+      const all = {
+        keyPlans: true,
+        keyPlanSnips: true,
+        photos:   true,
+        status:   true,
+        priority: true,
+        trade:    true,
+        dueDate:  true,
+        notes:    true,
+        reportCreatedBy: true,
+        attendees: true,
+        photosOnRight: true,
+        reportAsTable: prev.reportAsTable,
+      }
+      setImageLayout('right')
+      try {
+        localStorage.setItem('sitepunch_pdf_image_layout', 'right')
+        localStorage.setItem('sitepunch_export_fields', JSON.stringify(all))
+      } catch {}
+      return all
+    })
   }
 
   const handleDeselectAllFields = () => {
     const none = {
       keyPlans: false,
+      keyPlanSnips: false,
       photos:   false,
       status:   false,
       priority: false,
@@ -184,6 +197,7 @@ export default function PDFPreview() {
       reportCreatedBy: false,
       attendees: false,
       photosOnRight: false,
+      reportAsTable: false,
     }
     setExportFields(none)
     setImageLayout('below')
@@ -510,6 +524,117 @@ export default function PDFPreview() {
           })
         } catch (e) {
           console.warn('Keyplan render failed', e)
+          resolve(null)
+        }
+      }
+      img.onerror = () => resolve(null)
+      img.src = floorPlan.imageData
+    })
+  }
+
+  // Render high-res cropped floor plan snippet centered on a specific pin for the Table View
+  async function renderPinDrawingCrop(floorPlan, item) {
+    if (!floorPlan?.imageData) return null
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const natW = img.naturalWidth || img.width || 1600
+          const natH = img.naturalHeight || img.height || 1200
+
+          let rawX = item.pinX != null ? Number(item.pinX) : null
+          let rawY = item.pinY != null ? Number(item.pinY) : null
+
+          // Fallback to first extraPin if primary coordinates are missing
+          if ((rawX == null || isNaN(rawX)) && Array.isArray(item.extraPins) && item.extraPins.length > 0) {
+            const ep = item.extraPins.find(p => p.floorPlanUuid === floorPlan.uuid || (!p.floorPlanUuid && item.floorPlanUuid === floorPlan.uuid))
+            if (ep && ep.pinX != null && ep.pinY != null) {
+              rawX = Number(ep.pinX)
+              rawY = Number(ep.pinY)
+            }
+          }
+
+          if (rawX == null || isNaN(rawX) || rawY == null || isNaN(rawY)) {
+            resolve(null)
+            return
+          }
+
+          let px = rawX
+          let py = rawY
+          if (rawX <= 1 && rawY <= 1 && natW > 1 && natH > 1) {
+            px = rawX * natW
+            py = rawY * natH
+          }
+
+          // Crop window size: roughly 22% of image dimension (gives great architectural context around the pin)
+          const cropDim = Math.max(220, Math.round(Math.min(natW, natH) * 0.22))
+          const halfCrop = cropDim / 2
+
+          let cropX = Math.max(0, Math.min(natW - cropDim, px - halfCrop))
+          let cropY = Math.max(0, Math.min(natH - cropDim, py - halfCrop))
+          let actualCropW = Math.min(cropDim, natW - cropX)
+          let actualCropH = Math.min(cropDim, natH - cropY)
+
+          const outSize = 360
+          const canvas = document.createElement('canvas')
+          canvas.width = outSize
+          canvas.height = outSize
+          const ctx = canvas.getContext('2d')
+
+          // Background white
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, outSize, outSize)
+
+          // Draw cropped section of floor plan
+          ctx.drawImage(img, cropX, cropY, actualCropW, actualCropH, 0, 0, outSize, outSize)
+
+          // Pin relative coordinates on the cropped canvas
+          const pinCanvasX = ((px - cropX) / actualCropW) * outSize
+          const pinCanvasY = ((py - cropY) / actualCropH) * outSize
+
+          // Proportional pin radius
+          const pinR = Math.max(16, Math.round(outSize * 0.052))
+
+          // Subtle shadow
+          ctx.beginPath()
+          ctx.arc(pinCanvasX, pinCanvasY + 1.5, pinR + 2, 0, Math.PI * 2)
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'
+          ctx.fill()
+
+          // White outer border ring
+          ctx.beginPath()
+          ctx.arc(pinCanvasX, pinCanvasY, pinR + 1.5, 0, Math.PI * 2)
+          ctx.fillStyle = '#ffffff'
+          ctx.fill()
+
+          // Pin circle in brand pinColor
+          ctx.beginPath()
+          ctx.arc(pinCanvasX, pinCanvasY, pinR, 0, Math.PI * 2)
+          ctx.fillStyle = pinColor || '#a40e26'
+          ctx.fill()
+          ctx.lineWidth = 1.8
+          ctx.strokeStyle = '#ffffff'
+          ctx.stroke()
+
+          // Pin number (bold white)
+          ctx.fillStyle = '#ffffff'
+          const numStr = String(item.itemNumber || '')
+          const fontSize = numStr.length > 2
+            ? Math.round(pinR * 0.85)
+            : Math.round(pinR * 1.05)
+          const activeFontFamily = getFontFamily(selectedPdfFont || appFont)
+          ctx.font = `bold ${fontSize}px ${activeFontFamily}`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(numStr, pinCanvasX, pinCanvasY + 1)
+
+          resolve({
+            dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+            width: outSize,
+            height: outSize,
+          })
+        } catch (err) {
+          console.warn('renderPinDrawingCrop error', err)
           resolve(null)
         }
       }
@@ -1015,24 +1140,48 @@ export default function PDFPreview() {
         }
       }
 
+      // Pre-process drawing location crops for Table View and Key Plan Snips
+      const exportPinCropMap = {}
+      if (exportFields.reportAsTable || exportFields.keyPlanSnips) {
+        for (const it of itemsToExport) {
+          const fp = floorPlans.find(f => f.uuid === it.floorPlanUuid)
+          if (fp) {
+            const crop = await renderPinDrawingCrop(fp, it)
+            if (crop) {
+              exportPinCropMap[it.uuid] = crop
+            }
+          }
+        }
+      }
+
       // Reusable item renderer
       const renderObservationItem = (item) => {
         const fp = floorPlans.find(f => f.uuid === item.floorPlanUuid)
-        const photos = exportFields.photos ? (exportPhotosMap[item.uuid] || []) : []
+        const hasPlanCrop = Boolean(exportFields.keyPlanSnips && exportPinCropMap[item.uuid])
+        const planCrop = hasPlanCrop ? exportPinCropMap[item.uuid] : null
+        const planCropSize = 36
+        const planGap = 4.5
+        const planSheetText = fp ? `Sheets: ${fp.name}` : ''
+        doc.setFont(pdfFont, 'normal')
+        doc.setFontSize(7.0)
+        const planSheetLines = (hasPlanCrop && planSheetText) ? doc.splitTextToSize(planSheetText, planCropSize) : []
+        const planCropTotalH = hasPlanCrop ? (planCropSize + (planSheetLines.length > 0 ? (planSheetLines.length * 3.0 + 2) : 0)) : 0
 
-        // Calculate adaptive photo dimensions on the right side:
-        // 1. Photos are clearly readable and adaptively sized based on aspect ratio
-        // 2. Avoid dead space by allowing text column to expand up to the photos
-        // 3. Side-by-side arrangement for multiple photos when possible to prevent excessive vertical height
+        const planColW = hasPlanCrop ? planCropSize : 0
         const contentW = W - margin * 2
-        const maxPhotoAreaW = imageLayout === 'below' ? contentW : Math.min(contentW * 0.55, 105)
-        const photoGap = 3.5
+        const fieldsStartX = margin + (hasPlanCrop ? (planColW + planGap) : 0)
+        const fieldsW = contentW - (hasPlanCrop ? (planColW + planGap) : 0)
 
-        const photosToRender = photos.slice(0, 3)
-        const validPhotos = photosToRender.filter(p => !!p.imageData)
+        // Raw observation photos (Key Plan Snip is rendered separately on the left)
+        const photos = exportFields.photos ? (exportPhotosMap[item.uuid] || []) : []
+        const validPhotos = photos.filter(p => !!p.imageData)
         const numPhotos = validPhotos.length
         const photoDims = []
         let shouldStack = false
+
+        // Calculate adaptive photo dimensions within the fields area
+        const maxPhotoAreaW = imageLayout === 'below' ? fieldsW : Math.min(fieldsW * 0.48, 68)
+        const photoGap = 3.5
 
         if (numPhotos === 1) {
           const photo = validPhotos[0]
@@ -1041,65 +1190,47 @@ export default function PDFPreview() {
 
           if (imageLayout === 'below') {
             if (aspect >= 1.15) {
-              pW = Math.min(contentW, 110)
+              pW = Math.min(fieldsW, 95)
               pH = pW / aspect
-              if (pH > 65) { pH = 65; pW = pH * aspect }
+              if (pH > 60) { pH = 60; pW = pH * aspect }
             } else if (aspect >= 0.85) {
-              pH = 55
-              pW = pH * aspect
-            } else {
-              pH = 65
-              pW = pH * aspect
-              if (pW > contentW) { pW = contentW; pH = pW / aspect }
-            }
-          } else {
-            if (aspect >= 1.15) {
-              // Landscape photo: generous width, clean height, defects easily visible
-              pW = Math.min(maxPhotoAreaW, 82)
-              pH = pW / aspect
-              if (pH > 55) {
-                pH = 55
-                pW = pH * aspect
-              }
-              if (pH < 38) {
-                pH = 38
-                pW = Math.min(maxPhotoAreaW, pH * aspect)
-              }
-            } else if (aspect >= 0.85) {
-              // Square or near-square
               pH = 50
               pW = pH * aspect
             } else {
-              // Portrait photo (e.g. 3:4 or 9:16 vertical phone photo):
-              // Keep height generous so portrait image is readable and not a tiny strip
-              pH = 56
+              pH = 58
               pW = pH * aspect
-              if (pW < 35) {
-                // For extreme vertical photos (e.g. 9:16), ensure readable minimum width
-                pW = 35
-                pH = Math.min(62, pW / aspect)
-              }
-              if (pW > maxPhotoAreaW) {
-                pW = maxPhotoAreaW
-                pH = pW / aspect
-              }
+              if (pW > fieldsW) { pW = fieldsW; pH = pW / aspect }
+            }
+          } else {
+            if (aspect >= 1.15) {
+              pW = Math.min(maxPhotoAreaW, 65)
+              pH = pW / aspect
+              if (pH > 48) { pH = 48; pW = pH * aspect }
+              if (pH < 34) { pH = 34; pW = Math.min(maxPhotoAreaW, pH * aspect) }
+            } else if (aspect >= 0.85) {
+              pH = 45
+              pW = pH * aspect
+            } else {
+              pH = 50
+              pW = pH * aspect
+              if (pW < 30) { pW = 30; pH = Math.min(55, pW / aspect) }
+              if (pW > maxPhotoAreaW) { pW = maxPhotoAreaW; pH = pW / aspect }
             }
           }
           photoDims.push({ photo, pW, pH, aspect })
         } else if (numPhotos === 2) {
-          // Check if 2 photos fit side-by-side cleanly
           const p1 = validPhotos[0]
           const p2 = validPhotos[1]
           const a1 = p1.aspect && p1.aspect > 0 ? p1.aspect : 1.33
           const a2 = p2.aspect && p2.aspect > 0 ? p2.aspect : 1.33
 
           if (imageLayout === 'below') {
-            let targetH = 42
+            let targetH = 38
             let w1 = targetH * a1
             let w2 = targetH * a2
             let totalW = w1 + w2 + photoGap
-            if (totalW > contentW) {
-              const scale = (contentW - photoGap) / (w1 + w2)
+            if (totalW > fieldsW) {
+              const scale = (fieldsW - photoGap) / (w1 + w2)
               targetH *= scale
               w1 = targetH * a1
               w2 = targetH * a2
@@ -1107,14 +1238,14 @@ export default function PDFPreview() {
             photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
             photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
           } else {
-            let targetH = 40
+            let targetH = 35
             let w1 = targetH * a1
             let w2 = targetH * a2
             let totalW = w1 + w2 + photoGap
 
             if (totalW > maxPhotoAreaW) {
               const scale = (maxPhotoAreaW - photoGap) / (w1 + w2)
-              if (targetH * scale >= 30) {
+              if (targetH * scale >= 24) {
                 targetH *= scale
                 w1 = targetH * a1
                 w2 = targetH * a2
@@ -1124,7 +1255,7 @@ export default function PDFPreview() {
                 shouldStack = true
                 for (const photo of validPhotos) {
                   const aspect = photo.aspect && photo.aspect > 0 ? photo.aspect : 1.33
-                  let pH = 38
+                  let pH = 34
                   let pW = pH * aspect
                   if (pW > maxPhotoAreaW) {
                     pW = maxPhotoAreaW
@@ -1134,25 +1265,19 @@ export default function PDFPreview() {
                 }
               }
             } else {
-              if (totalW < maxPhotoAreaW * 0.75 && targetH < 46) {
-                const boost = Math.min(1.2, (maxPhotoAreaW * 0.85) / totalW)
-                targetH *= boost
-                w1 = targetH * a1
-                w2 = targetH * a2
-              }
               photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
               photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
             }
           }
         } else if (numPhotos >= 3) {
           if (imageLayout === 'below') {
-            let targetH = 36
+            let targetH = 34
             const aspects = validPhotos.map(p => (p.aspect && p.aspect > 0 ? p.aspect : 1.33))
             const widths = aspects.map(a => targetH * a)
             const totalW = widths.reduce((s, w) => s + w, 0) + (numPhotos - 1) * photoGap
-            if (totalW > contentW) {
-              const scale = (contentW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
-              if (targetH * scale >= 22) {
+            if (totalW > fieldsW) {
+              const scale = (fieldsW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
+              if (targetH * scale >= 20) {
                 targetH *= scale
                 validPhotos.forEach((photo, idx) => {
                   photoDims.push({ photo, pW: targetH * aspects[idx], pH: targetH, aspect: aspects[idx] })
@@ -1160,8 +1285,8 @@ export default function PDFPreview() {
               } else {
                 shouldStack = true
                 validPhotos.forEach((photo, idx) => {
-                  let pH = 36
-                  let pW = Math.min(contentW, pH * aspects[idx])
+                  let pH = 34
+                  let pW = Math.min(fieldsW, pH * aspects[idx])
                   photoDims.push({ photo, pW, pH, aspect: aspects[idx] })
                 })
               }
@@ -1171,7 +1296,7 @@ export default function PDFPreview() {
               })
             }
           } else {
-            let targetH = 32
+            let targetH = 30
             const aspects = validPhotos.map(p => (p.aspect && p.aspect > 0 ? p.aspect : 1.33))
             const widths = aspects.map(a => targetH * a)
             const totalW = widths.reduce((s, w) => s + w, 0) + (numPhotos - 1) * photoGap
@@ -1182,7 +1307,7 @@ export default function PDFPreview() {
               })
             } else {
               const scale = (maxPhotoAreaW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
-              if (targetH * scale >= 26) {
+              if (targetH * scale >= 22) {
                 targetH *= scale
                 validPhotos.forEach((photo, idx) => {
                   photoDims.push({ photo, pW: targetH * aspects[idx], pH: targetH, aspect: aspects[idx] })
@@ -1190,7 +1315,7 @@ export default function PDFPreview() {
               } else {
                 shouldStack = true
                 validPhotos.forEach((photo, idx) => {
-                  let pH = 34
+                  let pH = 30
                   let pW = Math.min(maxPhotoAreaW, pH * aspects[idx])
                   photoDims.push({ photo, pW, pH, aspect: aspects[idx] })
                 })
@@ -1206,14 +1331,12 @@ export default function PDFPreview() {
           : 0
 
         // Right-aligned photo starting X position
-        const photoStartX = (W - margin) - actualPhotoAreaW
+        const photoStartX = (fieldsStartX + fieldsW) - actualPhotoAreaW
 
         // Left text column width:
-        // When images are placed below notes, text takes full content width!
-        // When images are on right, text adapts up to photos gutter
         const textW = (imageLayout === 'below' || !hasPhotos)
-          ? contentW
-          : Math.max(50, photoStartX - margin - 6)
+          ? fieldsW
+          : Math.max(45, photoStartX - fieldsStartX - 5)
 
         // ── Observation text and label preparation ──
         const cleanNotes = stripHtmlToPlainText(item.notes || '')
@@ -1249,7 +1372,6 @@ export default function PDFPreview() {
         const renderPriorityBadge = Boolean(exportFields.priority && item.priority)
         const priorityBadgeText = `Priority: ${item.priority || 'Medium'}`
 
-        // Only show Due Date badge if a due date is actually entered
         const renderDueBadge = Boolean(exportFields.dueDate && item.dueDate)
         const dueBadgeText = renderDueBadge ? `Due: ${formatDatePattern(item.dueDate)}` : ''
 
@@ -1263,8 +1385,7 @@ export default function PDFPreview() {
         const badgeGap = 2.5
 
         const pinRadius = 3.0
-        const headingStartX = margin + pinRadius * 2 + 2.5
-        // Balanced margin: reduced between pin number & observations by half, identical margin before priority badges
+        const headingStartX = fieldsStartX + pinRadius * 2 + 2.5
         const sectionMargin = 2.75
 
         // Estimate item height for clean pagination
@@ -1280,9 +1401,11 @@ export default function PDFPreview() {
             totalPhotoH = Math.max(...photoDims.map(d => d.pH))
           }
         }
-        const itemH = imageLayout === 'below'
+        const rightColH = imageLayout === 'below'
           ? textH + (hasPhotos ? (totalPhotoH + sectionMargin) : 0) + 4
           : Math.max(textH, totalPhotoH) + 4
+
+        const itemH = Math.max(rightColH, planCropTotalH + 4)
 
         // If item overflows current page, move to next page
         if (y + itemH > H - margin - 4) {
@@ -1294,8 +1417,27 @@ export default function PDFPreview() {
         const startY = y
         let textY = startY
 
-        // 1. Key Plan Pin Style Marker (as is)
-        const circleCenterX = margin + pinRadius
+        // 1. If Key Plan Snip is ON, render Key Plan Snip on the LEFT side of the page
+        if (hasPlanCrop && planCrop?.dataUrl) {
+          try {
+            doc.addImage(planCrop.dataUrl, 'JPEG', margin, startY, planCropSize, planCropSize, '', 'FAST')
+            doc.setDrawColor(203, 213, 225)
+            doc.setLineWidth(0.2)
+            doc.rect(margin, startY, planCropSize, planCropSize)
+
+            if (planSheetLines.length > 0) {
+              doc.setFont(pdfFont, 'normal')
+              doc.setFontSize(7.0)
+              doc.setTextColor(71, 85, 105)
+              doc.text(planSheetLines, margin, startY + planCropSize + 2.8)
+            }
+          } catch (cropErr) {
+            console.warn('Failed to render plan crop on item:', cropErr)
+          }
+        }
+
+        // 2. All observation fields rendered AFTER the Key Plan (to the right of it)
+        const circleCenterX = fieldsStartX + pinRadius
         const circleCenterY = textY + pinRadius + 0.2
 
         // Outer pin circle with user's theme pin color
@@ -1315,7 +1457,7 @@ export default function PDFPreview() {
         doc.setFontSize(numStr.length > 2 ? 6.5 : numStr.length > 1 ? 7.2 : 8)
         doc.text(numStr, circleCenterX, circleCenterY + 0.85, { align: 'center' })
 
-        // 2. Heading: Pin Marker followed by Trade Label (Trade: General) if enabled
+        // Heading: Pin Marker followed by Trade Label (Trade: General) if enabled
         if (headingText) {
           doc.setTextColor(15, 23, 42)
           doc.setFont(pdfFont, 'bold')
@@ -1326,12 +1468,12 @@ export default function PDFPreview() {
         // Reduced margin between pin item # / trade and observation field (by half)
         textY += pinRadius * 2 + sectionMargin
 
-        // 3. Observations with bold "Observation:" label
+        // Observations with bold "Observation:" label
         if (obsLines.length > 0) {
           doc.setFont(pdfFont, 'bold')
           doc.setFontSize(8.5)
           doc.setTextColor(15, 23, 42)
-          doc.text(obsPrefix, margin, textY + 1.2)
+          doc.text(obsPrefix, fieldsStartX, textY + 1.2)
           const obsLabelW = doc.getTextWidth(obsPrefix)
 
           doc.setFont(pdfFont, 'normal')
@@ -1339,22 +1481,20 @@ export default function PDFPreview() {
           const firstLineBody = obsLines[0].startsWith(obsPrefix)
             ? obsLines[0].slice(obsPrefix.length)
             : obsLines[0].replace(/^Observation:\s*/, '')
-          doc.text(firstLineBody, margin + obsLabelW, textY + 1.2)
+          doc.text(firstLineBody, fieldsStartX + obsLabelW, textY + 1.2)
 
           for (let li = 1; li < obsLines.length; li++) {
             textY += 4.2
-            doc.text(obsLines[li], margin, textY + 1.2)
+            doc.text(obsLines[li], fieldsStartX, textY + 1.2)
           }
-          // Same margin height space between observations and priority field line
           textY += 1.8 + sectionMargin
         }
 
-        // 4. Priority and Due Date Badges (placed below observations)
+        // Priority and Due Date Badges
         if (renderPriorityBadge || renderDueBadge) {
-          let currentBadgeX = margin
+          let currentBadgeX = fieldsStartX
           const badgeY = textY
 
-          // Priority Badge
           if (renderPriorityBadge) {
             const prio = (item.priority || 'Medium').toLowerCase()
             let prioBg = [254, 243, 199]
@@ -1388,7 +1528,6 @@ export default function PDFPreview() {
             currentBadgeX += pW + badgeGap
           }
 
-          // Due Date Badge (only rendered if a due date is entered)
           if (renderDueBadge) {
             doc.setFillColor(241, 245, 249)
             doc.setDrawColor(203, 213, 225)
@@ -1406,11 +1545,10 @@ export default function PDFPreview() {
           textY += bH + 3.0
         }
 
-        // 4. Photos (placement based on imageLayout: 'below' observation notes or 'right' side)
+        // Photos (placement based on imageLayout: 'below' observation notes or 'right' side)
         let photoEndY = startY
         if (hasPhotos) {
           if (imageLayout === 'below') {
-            // Render photos horizontally below the notes and badges
             const currentPy = textY
             if (shouldStack) {
               let py = currentPy
@@ -1420,7 +1558,7 @@ export default function PDFPreview() {
                   doc.addPage()
                   py = margin
                 }
-                const px = margin
+                const px = fieldsStartX
                 try {
                   doc.addImage(d.photo.imageData, 'JPEG', px, py, d.pW, d.pH, '', 'FAST')
                   doc.setDrawColor(226, 232, 240)
@@ -1431,7 +1569,6 @@ export default function PDFPreview() {
               }
               photoEndY = py - photoGap
             } else {
-              // Side-by-side row below notes
               const rowH = Math.max(...photoDims.map(d => d.pH))
               let py = currentPy
               if (py + rowH > H - margin - 4) {
@@ -1439,7 +1576,7 @@ export default function PDFPreview() {
                 doc.addPage()
                 py = margin
               }
-              let px = margin
+              let px = fieldsStartX
               for (const d of photoDims) {
                 try {
                   doc.addImage(d.photo.imageData, 'JPEG', px, py, d.pW, d.pH, '', 'FAST')
@@ -1451,9 +1588,8 @@ export default function PDFPreview() {
               }
               photoEndY = py + rowH
             }
-            y = photoEndY + 3.5
+            y = Math.max(photoEndY, startY + planCropTotalH) + 3.5
           } else {
-            // Right-aligned photo layout
             if (shouldStack) {
               let currentPy = startY
               for (const d of photoDims) {
@@ -1480,10 +1616,10 @@ export default function PDFPreview() {
               }
               photoEndY = startY + Math.max(...photoDims.map(d => d.pH))
             }
-            y = Math.max(textY, photoEndY) + 3.5
+            y = Math.max(textY, photoEndY, startY + planCropTotalH) + 3.5
           }
         } else {
-          y = textY + 3.5
+          y = Math.max(textY, startY + planCropTotalH) + 3.5
         }
 
         // Light separator between items
@@ -1496,96 +1632,484 @@ export default function PDFPreview() {
       // Track exported items so none are missed
       const exportedItemUuids = new Set()
 
-      // ── EACH DRAWING KEY PLAN HAS ITS PUNCH LIST BELOW IT BEFORE NEXT DRAWING ──
-      for (let dIdx = 0; dIdx < drawingsToRender.length; dIdx++) {
-        const fp = drawingsToRender[dIdx]
-
-        // Advance to a clean page:
-        // 1. Always for subsequent drawings when key plans are included
-        // 2. For the first drawing (dIdx === 0) if project metadata occupies the top of page 1,
-        //    giving the key plan architectural drawing a dedicated full-page view without squeezing or cropping
+      if (exportFields.reportAsTable) {
+        // ── RENDER KEY PLANS IF ENABLED ──
         if (exportFields.keyPlans) {
-          if (dIdx > 0 || y > margin + 40) {
+          for (let dIdx = 0; dIdx < drawingsToRender.length; dIdx++) {
+            const fp = drawingsToRender[dIdx]
+            if (dIdx > 0 || y > margin + 40) {
+              addPageNum()
+              doc.addPage()
+              y = margin
+            }
+
+            const itemsOnFp = (isCapped ? itemsToExport : items).filter(i => {
+              const hasPinOnThisFp = (i.floorPlanUuid === fp.uuid) || (Array.isArray(i.extraPins) && i.extraPins.some(ep => ep.floorPlanUuid === fp.uuid))
+              if (!hasPinOnThisFp) return false
+              if (filterReport !== 'All') {
+                const belongs = i.phaseUuid === filterReport || fp.phaseUuid === filterReport || (!fp.phaseUuid && filterReport === phases[0]?.uuid)
+                if (!belongs) return false
+              }
+              return true
+            })
+
+            const planResult = await renderFloorPlanWithPins(fp, itemsOnFp)
+            if (planResult && planResult.dataUrl) {
+              const titleH = 7
+              const maxAllowedW = W - margin * 2
+              let maxAllowedH = H - margin - y - titleH - 6
+              if (maxAllowedH < 90 && y > margin) {
+                addPageNum()
+                doc.addPage()
+                y = margin
+                maxAllowedH = H - margin - y - titleH - 6
+              }
+
+              let planW = maxAllowedW
+              let planH = planW / planResult.aspect
+              if (planH > maxAllowedH) {
+                planH = maxAllowedH
+                planW = planH * planResult.aspect
+              }
+              if (planW > maxAllowedW) {
+                planW = maxAllowedW
+                planH = planW / planResult.aspect
+              }
+              const planX = margin + Math.max(0, (maxAllowedW - planW) / 2)
+
+              doc.setFont(pdfFont, 'bold')
+              doc.setFontSize(9.5)
+              doc.setTextColor(15, 23, 42)
+              doc.text(`KEY PLAN — ${fp.name.toUpperCase()} (PIN LOCATIONS)`, margin, y + 3.5)
+              y += titleH
+
+              try {
+                doc.addImage(planResult.dataUrl, 'JPEG', planX, y, planW, planH, '', 'FAST')
+                doc.setDrawColor(203, 213, 225)
+                doc.setLineWidth(0.2)
+                doc.rect(planX, y, planW, planH)
+              } catch (imgErr) {
+                console.warn('Failed to render key plan image onto PDF:', imgErr)
+              }
+              y += planH + 7
+            }
+          }
+        }
+
+        // ── RENDER OBSERVATIONS TABLE ──
+        if (itemsToExport.length > 0) {
+          if (exportFields.keyPlans && drawingsToRender.length > 0) {
+            addPageNum()
+            doc.addPage()
+            y = margin
+          } else if (y > H - margin - 45) {
             addPageNum()
             doc.addPage()
             y = margin
           }
-        }
 
-        if (exportFields.keyPlans) {
-          // Pins on this key plan:
-          // When unlicensed/capped: only place pins for items that are actually exported (first 2 observation points total)
-          // When licensed: place all pins on this drawing in the current report context
-          const itemsOnFp = (isCapped ? itemsToExport : items).filter(i => {
-            const hasPinOnThisFp = (i.floorPlanUuid === fp.uuid) || (Array.isArray(i.extraPins) && i.extraPins.some(ep => ep.floorPlanUuid === fp.uuid))
-            if (!hasPinOnThisFp) return false
-            if (filterReport !== 'All') {
-              const belongs = i.phaseUuid === filterReport || fp.phaseUuid === filterReport || (!fp.phaseUuid && filterReport === phases[0]?.uuid)
-              if (!belongs) return false
+          doc.setFont(pdfFont, 'bold')
+          doc.setFontSize(11)
+          doc.setTextColor(15, 23, 42)
+          doc.text('Observations', margin, y + 2)
+          y += 6
+
+          const tableW = W - margin * 2
+
+          // Dynamic table columns based on enabled Report Field Visibility settings
+          const candidateCols = []
+          // 1. When Key Plan Snip with Pin is ON, align Key Plan to the LEFT side of the page (Column 1)
+          if (exportFields.keyPlanSnips) candidateCols.push({ id: 'keyPlanSnips', title: 'Drawing location', weight: 1.6, minW: 28 })
+          // 2. All other fields after that
+          if (exportFields.trade) candidateCols.push({ id: 'trade', title: 'Category', weight: 1.2, minW: 20 })
+          if (exportFields.notes) candidateCols.push({ id: 'notes', title: 'Description', weight: 2.4, minW: 32, flex: true })
+          if (exportFields.status) candidateCols.push({ id: 'status', title: 'Status', weight: 0.85, minW: 18 })
+          if (exportFields.priority) candidateCols.push({ id: 'priority', title: 'Priority', weight: 0.85, minW: 18 })
+          if (exportFields.dueDate) candidateCols.push({ id: 'dueDate', title: 'Due Date', weight: 0.9, minW: 18 })
+          if (exportFields.photos) candidateCols.push({ id: 'photos', title: 'Photos', weight: 1.6, minW: 28 })
+
+          const activeCols = candidateCols.length > 0 ? candidateCols : [
+            { id: 'notes', title: 'Description', weight: 2.5, minW: 50, flex: true },
+            { id: 'photos', title: 'Photos', weight: 1.5, minW: 35 }
+          ]
+
+          // Distribute widths proportionally across the full table width
+          const totalColWeight = activeCols.reduce((sum, c) => sum + c.weight, 0)
+          let allocatedW = 0
+          activeCols.forEach((col, idx) => {
+            if (idx === activeCols.length - 1) {
+              col.w = tableW - allocatedW
+            } else {
+              col.w = Math.max(col.minW, Math.round((col.weight / totalColWeight) * tableW))
+              allocatedW += col.w
             }
-            return true
           })
+          const curTotalW = activeCols.reduce((sum, c) => sum + c.w, 0)
+          if (curTotalW !== tableW) {
+            const diff = tableW - curTotalW
+            const flexCol = activeCols.find(c => c.flex) || activeCols[activeCols.length - 1]
+            flexCol.w += diff
+          }
 
-          const planResult = await renderFloorPlanWithPins(fp, itemsOnFp)
+          let curColX = margin
+          for (const col of activeCols) {
+            col.x = curColX
+            curColX += col.w
+          }
 
-          if (planResult && planResult.dataUrl) {
-            const titleH = 7 // Title text + spacing
-            const maxAllowedW = W - margin * 2
-            let maxAllowedH = H - margin - y - titleH - 6 // Remaining vertical space with safety buffer
+          const drawTableHeader = (curY) => {
+            const hH = 7.5
+            doc.setDrawColor(15, 23, 42)
+            doc.setLineWidth(0.3)
+            doc.line(margin, curY, margin + tableW, curY)
+            doc.line(margin, curY + hH, margin + tableW, curY + hH)
 
-            // If remaining space on this page is too tight to display an architectural plan legibly (< 90mm), advance to next page
-            if (maxAllowedH < 90 && y > margin) {
+            for (const col of activeCols) {
+              doc.line(col.x, curY, col.x, curY + hH)
+            }
+            doc.line(margin + tableW, curY, margin + tableW, curY + hH)
+
+            // Header titles: CENTER ALIGNED, NO UNDERLINES
+            doc.setFont(pdfFont, 'bold')
+            doc.setFontSize(8.5)
+            doc.setTextColor(15, 23, 42)
+
+            activeCols.forEach(col => {
+              const centerX = col.x + col.w / 2
+              doc.text(col.title, centerX, curY + 5.0, { align: 'center' })
+            })
+
+            return curY + hH
+          }
+
+          y = drawTableHeader(y)
+
+          const colCategory = activeCols.find(c => c.id === 'trade')
+          const colDesc = activeCols.find(c => c.id === 'notes')
+          const colStatus = activeCols.find(c => c.id === 'status')
+          const colPriority = activeCols.find(c => c.id === 'priority')
+          const colDueDate = activeCols.find(c => c.id === 'dueDate')
+          const colPhotos = activeCols.find(c => c.id === 'photos')
+          const colLocation = activeCols.find(c => c.id === 'keyPlanSnips')
+
+          for (const item of itemsToExport) {
+            const fp = floorPlans.find(f => f.uuid === item.floorPlanUuid)
+            const photos = colPhotos ? (exportPhotosMap[item.uuid] || []) : []
+            const crop = colLocation ? exportPinCropMap[item.uuid] : null
+
+            // Category text
+            const rawTrade = item.trade || 'General'
+            doc.setFont(pdfFont, 'normal')
+            doc.setFontSize(8.5)
+            const catLines = colCategory ? doc.splitTextToSize(rawTrade, colCategory.w - 4) : []
+
+            // Description text
+            const cleanNotes = stripHtmlToPlainText(item.notes || '')
+            const cleanTitle = stripHtmlToPlainText(item.title || '')
+            const descText = (cleanNotes && cleanTitle && cleanNotes.trim() !== cleanTitle.trim())
+              ? `${cleanTitle.trim()} — ${cleanNotes.trim()}`
+              : (cleanNotes || cleanTitle || '—')
+            const descLines = colDesc ? doc.splitTextToSize(descText, colDesc.w - 5) : []
+
+            // Status text
+            const statusText = normalizeObservationStatus(item.status)
+
+            // Priority text
+            const prioText = item.priority || 'Medium'
+
+            // Due Date text
+            const dueText = item.dueDate ? formatDatePattern(item.dueDate) : '—'
+
+            // Photos sizing - ALL images related to that pin inside table
+            const validPhotos = colPhotos ? photos.filter(p => !!p.imageData) : []
+            const photoDims = []
+            const photoGap = 2.5
+            let totalPhotoH = 0
+
+            if (colPhotos && validPhotos.length > 0) {
+              const maxPW = Math.max(16, colPhotos.w - 5)
+              for (const p of validPhotos) {
+                const aspect = p.aspect && p.aspect > 0 ? p.aspect : 1.33
+                let pW = Math.min(maxPW, 32)
+                let pH = pW / aspect
+                if (pH > 28) {
+                  pH = 28
+                  pW = pH * aspect
+                }
+                photoDims.push({ p, pW, pH, aspect })
+              }
+              totalPhotoH = photoDims.reduce((sum, d) => sum + d.pH, 0) + (photoDims.length - 1) * photoGap
+            }
+
+            // Drawing location snippet sizing
+            const cropSize = (colLocation && crop) ? Math.min(28, colLocation.w - 6) : 0
+            const sheetText = `Sheets: ${fp?.name || 'Floor Plan'}`
+            doc.setFont(pdfFont, 'normal')
+            doc.setFontSize(7.5)
+            const sheetLines = colLocation ? doc.splitTextToSize(sheetText, colLocation.w - 4) : []
+
+            // Determine row height
+            const heightList = [14] // minimum base row height
+            if (colCategory) heightList.push(catLines.length * 4.2 + 5)
+            if (colDesc) heightList.push(descLines.length * 4.2 + 5)
+            if (colStatus) heightList.push(10)
+            if (colPriority) heightList.push(10)
+            if (colDueDate) heightList.push(10)
+            if (colPhotos) heightList.push(validPhotos.length > 0 ? (totalPhotoH + 5) : 8)
+            if (colLocation) heightList.push(crop ? (cropSize + sheetLines.length * 3.4 + 6) : (sheetLines.length * 3.4 + 6))
+
+            const rowH = Math.max(...heightList)
+
+            // Pagination check
+            if (y + rowH > H - margin - 8) {
               addPageNum()
               doc.addPage()
               y = margin
-              maxAllowedH = H - margin - y - titleH - 6
+              y = drawTableHeader(y)
             }
 
-            // Fit strictly within maxAllowedW x maxAllowedH preserving exact aspect ratio (contain - ZERO CROP)
-            let planW = maxAllowedW
-            let planH = planW / planResult.aspect
-
-            // If height exceeds available vertical space, scale down proportionally by height
-            if (planH > maxAllowedH) {
-              planH = maxAllowedH
-              planW = planH * planResult.aspect
+            // Render Category
+            if (colCategory) {
+              doc.setFont(pdfFont, 'normal')
+              doc.setFontSize(8.5)
+              doc.setTextColor(15, 23, 42)
+              doc.text(catLines, colCategory.x + 2, y + 4.5)
             }
 
-            // If width exceeds available horizontal space, scale down proportionally by width
-            if (planW > maxAllowedW) {
-              planW = maxAllowedW
-              planH = planW / planResult.aspect
+            // Render Description
+            if (colDesc) {
+              doc.setFont(pdfFont, 'normal')
+              doc.setFontSize(8.5)
+              doc.setTextColor(15, 23, 42)
+              doc.text(descLines, colDesc.x + 2.5, y + 4.5)
             }
 
-            // Horizontally center the key plan within the page margins
-            const planX = margin + Math.max(0, (maxAllowedW - planW) / 2)
-
-            // Keyplan Title - Simple Text (Capitalized)
-            doc.setFont(pdfFont, 'bold')
-            doc.setFontSize(9.5)
-            doc.setTextColor(15, 23, 42)
-            doc.text(`KEY PLAN — ${fp.name.toUpperCase()} (PIN LOCATIONS)`, margin, y + 3.5)
-            y += titleH
-
-            try {
-              doc.addImage(planResult.dataUrl, 'JPEG', planX, y, planW, planH, '', 'FAST')
-              doc.setDrawColor(203, 213, 225)
+            // Render Status
+            if (colStatus) {
+              const st = (item.status || 'open').toLowerCase()
+              let sBg = [239, 246, 255], sBorder = [191, 219, 254], sText = [29, 78, 216]
+              if (st.includes('progress')) {
+                sBg = [254, 243, 199]; sBorder = [252, 211, 77]; sText = [180, 83, 9]
+              } else if (st.includes('close') || st.includes('resolve') || st.includes('done')) {
+                sBg = [240, 253, 244]; sBorder = [187, 247, 208]; sText = [22, 101, 52]
+              }
+              doc.setFont(pdfFont, 'bold')
+              doc.setFontSize(7.5)
+              const sW = Math.min(colStatus.w - 3, doc.getTextWidth(statusText) + 4)
+              const sH = 4.6
+              const sX = colStatus.x + (colStatus.w - sW) / 2
+              const sY = y + 3.5
+              doc.setFillColor(sBg[0], sBg[1], sBg[2])
+              doc.setDrawColor(sBorder[0], sBorder[1], sBorder[2])
               doc.setLineWidth(0.2)
-              doc.rect(planX, y, planW, planH)
-            } catch (imgErr) {
-              console.warn('Failed to render key plan image onto PDF:', imgErr)
+              doc.roundedRect(sX, sY, sW, sH, 1.2, 1.2, 'FD')
+              doc.setTextColor(sText[0], sText[1], sText[2])
+              doc.text(statusText, sX + sW / 2, sY + 3.2, { align: 'center' })
             }
 
-            y += planH + 7
+            // Render Priority
+            if (colPriority) {
+              const pr = (item.priority || 'medium').toLowerCase()
+              let pBg = [254, 243, 199], pBorder = [252, 211, 77], pText = [180, 83, 9]
+              if (pr === 'critical') {
+                pBg = [254, 242, 242]; pBorder = [254, 202, 202]; pText = [185, 28, 28]
+              } else if (pr === 'high') {
+                pBg = [255, 247, 237]; pBorder = [254, 215, 170]; pText = [194, 65, 12]
+              } else if (pr === 'low') {
+                pBg = [241, 245, 249]; pBorder = [203, 213, 225]; pText = [71, 85, 105]
+              }
+              doc.setFont(pdfFont, 'bold')
+              doc.setFontSize(7.5)
+              const pBadgeW = Math.min(colPriority.w - 3, doc.getTextWidth(prioText) + 4)
+              const pBadgeH = 4.6
+              const pBadgeX = colPriority.x + (colPriority.w - pBadgeW) / 2
+              const pBadgeY = y + 3.5
+              doc.setFillColor(pBg[0], pBg[1], pBg[2])
+              doc.setDrawColor(pBorder[0], pBorder[1], pBorder[2])
+              doc.setLineWidth(0.2)
+              doc.roundedRect(pBadgeX, pBadgeY, pBadgeW, pBadgeH, 1.2, 1.2, 'FD')
+              doc.setTextColor(pText[0], pText[1], pText[2])
+              doc.text(prioText, pBadgeX + pBadgeW / 2, pBadgeY + 3.2, { align: 'center' })
+            }
+
+            // Render Due Date
+            if (colDueDate) {
+              doc.setFont(pdfFont, 'normal')
+              doc.setFontSize(8)
+              doc.setTextColor(51, 65, 85)
+              doc.text(dueText, colDueDate.x + colDueDate.w / 2, y + 6.5, { align: 'center' })
+            }
+
+            // Render ALL Photos related to that pin
+            if (colPhotos) {
+              if (photoDims.length > 0) {
+                let curPy = y + 2.5
+                for (const d of photoDims) {
+                  const px = colPhotos.x + (colPhotos.w - d.pW) / 2
+                  try {
+                    doc.addImage(d.p.imageData, 'JPEG', px, curPy, d.pW, d.pH, '', 'FAST')
+                    doc.setDrawColor(203, 213, 225)
+                    doc.setLineWidth(0.2)
+                    doc.rect(px, curPy, d.pW, d.pH)
+                  } catch {}
+                  curPy += d.pH + photoGap
+                }
+              } else {
+                doc.setFont(pdfFont, 'normal')
+                doc.setFontSize(8.5)
+                doc.setTextColor(148, 163, 184)
+                doc.text('—', colPhotos.x + colPhotos.w / 2, y + 6.5, { align: 'center' })
+              }
+            }
+
+            // Render Drawing Location
+            if (colLocation) {
+              let curLocY = y + 2.5
+              if (crop?.dataUrl) {
+                const cx = colLocation.x + (colLocation.w - cropSize) / 2
+                try {
+                  doc.addImage(crop.dataUrl, 'JPEG', cx, curLocY, cropSize, cropSize, '', 'FAST')
+                  doc.setDrawColor(203, 213, 225)
+                  doc.setLineWidth(0.2)
+                  doc.rect(cx, curLocY, cropSize, cropSize)
+                } catch {}
+                curLocY += cropSize + 2.5
+              }
+              doc.setFont(pdfFont, 'normal')
+              doc.setFontSize(7.5)
+              doc.setTextColor(51, 65, 85)
+              doc.text(sheetLines, colLocation.x + 2, curLocY + 1.2)
+            }
+
+            // Draw table grid borders for this row
+            doc.setDrawColor(15, 23, 42)
+            doc.setLineWidth(0.25)
+            for (const col of activeCols) {
+              doc.line(col.x, y, col.x, y + rowH)
+            }
+            doc.line(margin + tableW, y, margin + tableW, y + rowH)
+            doc.line(margin, y + rowH, margin + tableW, y + rowH)
+
+            y += rowH
+          }
+        }
+      } else {
+        // ── EACH DRAWING KEY PLAN HAS ITS PUNCH LIST BELOW IT BEFORE NEXT DRAWING ──
+        for (let dIdx = 0; dIdx < drawingsToRender.length; dIdx++) {
+          const fp = drawingsToRender[dIdx]
+
+          // Advance to a clean page:
+          // 1. Always for subsequent drawings when key plans are included
+          // 2. For the first drawing (dIdx === 0) if project metadata occupies the top of page 1,
+          //    giving the key plan architectural drawing a dedicated full-page view without squeezing or cropping
+          if (exportFields.keyPlans) {
+            if (dIdx > 0 || y > margin + 40) {
+              addPageNum()
+              doc.addPage()
+              y = margin
+            }
+          }
+
+          if (exportFields.keyPlans) {
+            // Pins on this key plan:
+            // When unlicensed/capped: only place pins for items that are actually exported (first 2 observation points total)
+            // When licensed: place all pins on this drawing in the current report context
+            const itemsOnFp = (isCapped ? itemsToExport : items).filter(i => {
+              const hasPinOnThisFp = (i.floorPlanUuid === fp.uuid) || (Array.isArray(i.extraPins) && i.extraPins.some(ep => ep.floorPlanUuid === fp.uuid))
+              if (!hasPinOnThisFp) return false
+              if (filterReport !== 'All') {
+                const belongs = i.phaseUuid === filterReport || fp.phaseUuid === filterReport || (!fp.phaseUuid && filterReport === phases[0]?.uuid)
+                if (!belongs) return false
+              }
+              return true
+            })
+
+            const planResult = await renderFloorPlanWithPins(fp, itemsOnFp)
+
+            if (planResult && planResult.dataUrl) {
+              const titleH = 7 // Title text + spacing
+              const maxAllowedW = W - margin * 2
+              let maxAllowedH = H - margin - y - titleH - 6 // Remaining vertical space with safety buffer
+
+              // If remaining space on this page is too tight to display an architectural plan legibly (< 90mm), advance to next page
+              if (maxAllowedH < 90 && y > margin) {
+                addPageNum()
+                doc.addPage()
+                y = margin
+                maxAllowedH = H - margin - y - titleH - 6
+              }
+
+              // Fit strictly within maxAllowedW x maxAllowedH preserving exact aspect ratio (contain - ZERO CROP)
+              let planW = maxAllowedW
+              let planH = planW / planResult.aspect
+
+              // If height exceeds available vertical space, scale down proportionally by height
+              if (planH > maxAllowedH) {
+                planH = maxAllowedH
+                planW = planH * planResult.aspect
+              }
+
+              // If width exceeds available horizontal space, scale down proportionally by width
+              if (planW > maxAllowedW) {
+                planW = maxAllowedW
+                planH = planW / planResult.aspect
+              }
+
+              // Horizontally center the key plan within the page margins
+              const planX = margin + Math.max(0, (maxAllowedW - planW) / 2)
+
+              // Keyplan Title - Simple Text (Capitalized)
+              doc.setFont(pdfFont, 'bold')
+              doc.setFontSize(9.5)
+              doc.setTextColor(15, 23, 42)
+              doc.text(`KEY PLAN — ${fp.name.toUpperCase()} (PIN LOCATIONS)`, margin, y + 3.5)
+              y += titleH
+
+              try {
+                doc.addImage(planResult.dataUrl, 'JPEG', planX, y, planW, planH, '', 'FAST')
+                doc.setDrawColor(203, 213, 225)
+                doc.setLineWidth(0.2)
+                doc.rect(planX, y, planW, planH)
+              } catch (imgErr) {
+                console.warn('Failed to render key plan image onto PDF:', imgErr)
+              }
+
+              y += planH + 7
+            }
+          }
+
+          // Observations on this drawing
+          const fpPunchItems = itemsToExport.filter(i => i.floorPlanUuid === fp.uuid)
+
+          if (fpPunchItems.length > 0) {
+            // If remaining vertical space cannot accommodate observations header + first item with photos (~45mm), advance to clean page
+            if (y > H - margin - 45) {
+              addPageNum()
+              doc.addPage()
+              y = margin
+            }
+
+            doc.setFont(pdfFont, 'bold')
+            doc.setFontSize(10)
+            doc.setTextColor(15, 23, 42)
+            doc.text(`OBSERVATIONS — ${fp.name.toUpperCase()}`, margin, y + 2)
+            y += 5
+            doc.setDrawColor(203, 213, 225)
+            doc.setLineWidth(0.2)
+            doc.line(margin, y, W - margin, y)
+            y += 5
+
+            for (const item of fpPunchItems) {
+              renderObservationItem(item)
+              exportedItemUuids.add(item.uuid)
+            }
           }
         }
 
-        // Observations on this drawing
-        const fpPunchItems = itemsToExport.filter(i => i.floorPlanUuid === fp.uuid)
-
-        if (fpPunchItems.length > 0) {
-          // If remaining vertical space cannot accommodate observations header + first item with photos (~45mm), advance to clean page
-          if (y > H - margin - 45) {
+        // ── ANY UNASSIGNED ITEMS (NOT TIED TO RENDERED DRAWINGS) ───────────────
+        const remainingItems = itemsToExport.filter(i => !exportedItemUuids.has(i.uuid))
+        if (remainingItems.length > 0) {
+          if (drawingsToRender.length > 0 && y > H - margin - 30) {
             addPageNum()
             doc.addPage()
             y = margin
@@ -1594,42 +2118,17 @@ export default function PDFPreview() {
           doc.setFont(pdfFont, 'bold')
           doc.setFontSize(10)
           doc.setTextColor(15, 23, 42)
-          doc.text(`OBSERVATIONS — ${fp.name.toUpperCase()}`, margin, y + 2)
+          doc.text('OBSERVATION ITEMS', margin, y + 2)
           y += 5
           doc.setDrawColor(203, 213, 225)
           doc.setLineWidth(0.2)
           doc.line(margin, y, W - margin, y)
           y += 5
 
-          for (const item of fpPunchItems) {
+          for (const item of remainingItems) {
             renderObservationItem(item)
             exportedItemUuids.add(item.uuid)
           }
-        }
-      }
-
-      // ── ANY UNASSIGNED ITEMS (NOT TIED TO RENDERED DRAWINGS) ───────────────
-      const remainingItems = itemsToExport.filter(i => !exportedItemUuids.has(i.uuid))
-      if (remainingItems.length > 0) {
-        if (drawingsToRender.length > 0 && y > H - margin - 30) {
-          addPageNum()
-          doc.addPage()
-          y = margin
-        }
-
-        doc.setFont(pdfFont, 'bold')
-        doc.setFontSize(10)
-        doc.setTextColor(15, 23, 42)
-        doc.text('OBSERVATION ITEMS', margin, y + 2)
-        y += 5
-        doc.setDrawColor(203, 213, 225)
-        doc.setLineWidth(0.2)
-        doc.line(margin, y, W - margin, y)
-        y += 5
-
-        for (const item of remainingItems) {
-          renderObservationItem(item)
-          exportedItemUuids.add(item.uuid)
         }
       }
 
@@ -1829,57 +2328,119 @@ export default function PDFPreview() {
                     Choose which key plan drawings and observation fields to show in the export:
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {[
-                      { id: 'keyPlans',        label: 'Key Plans' },
-                      { id: 'photos',          label: 'Observation Photos' },
-                      { id: 'status',          label: 'Status' },
-                      { id: 'priority',        label: 'Priority' },
-                      { id: 'trade',           label: 'Category' },
-                      { id: 'dueDate',         label: 'Due Date' },
-                      { id: 'notes',           label: 'Pin Observation Description' },
-                      { id: 'reportCreatedBy', label: 'Report Created By' },
-                      { id: 'attendees',       label: 'List of Attendees' },
-                      {
-                        id: 'photosOnRight',
-                        label: 'Observation Images on Right Side',
-                        sublabel: exportFields.photosOnRight ? 'On the right side' : 'Below observation notes'
-                      },
-                    ].map(field => {
-                      const isChecked = !!exportFields[field.id]
-                      return (
-                        <button
-                          key={field.id}
-                          type="button"
-                          onClick={() => toggleExportField(field.id)}
-                          className={`flex items-center gap-3 p-3 rounded-xl border text-left transition-all ${
-                            isChecked
-                              ? 'border-brand-500 bg-blue-50/50 shadow-2xs ring-1 ring-brand-300/60'
-                              : 'border-gray-200 bg-white hover:bg-gray-50/80 text-gray-500'
-                          }`}
-                        >
-                          <div
-                            className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
+                    {/* Column 1: Key Plans & Drawing fields */}
+                    <div className="flex flex-col gap-2.5">
+                      {[
+                        { id: 'keyPlans',        label: 'Key Plans' },
+                        {
+                          id: 'keyPlanSnips',
+                          label: 'Key Plan Snip with Pin',
+                          sublabel: 'Snip around pin next to observation item'
+                        },
+                        { id: 'status',          label: 'Status' },
+                        { id: 'priority',        label: 'Priority' },
+                        { id: 'trade',           label: 'Category' },
+                        { id: 'reportCreatedBy', label: 'Report Created By' },
+                      ].map(field => {
+                        const isChecked = !!exportFields[field.id]
+                        return (
+                          <button
+                            key={field.id}
+                            type="button"
+                            onClick={() => toggleExportField(field.id)}
+                            className={`flex items-center gap-3 p-3 rounded-xl border text-left transition-all ${
                               isChecked
-                                ? 'text-white'
-                                : 'border-2 border-gray-300 bg-white'
+                                ? 'border-brand-500 bg-blue-50/50 shadow-2xs ring-1 ring-brand-300/60'
+                                : 'border-gray-200 bg-white hover:bg-gray-50/80 text-gray-500'
                             }`}
-                            style={isChecked ? { background: 'var(--brand-button, #1d4ed8)' } : {}}
                           >
-                            {isChecked && <Check size={12} strokeWidth={3} />}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className={`text-xs font-bold leading-tight ${isChecked ? 'text-gray-900' : 'text-gray-500'}`}>
-                              {field.label}
-                            </p>
-                            {field.sublabel && (
-                              <p className={`text-[10px] mt-0.5 font-medium leading-tight ${isChecked ? 'text-brand-700' : 'text-gray-400'}`}>
-                                {field.sublabel}
+                            <div
+                              className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
+                                isChecked
+                                  ? 'text-white'
+                                  : 'border-2 border-gray-300 bg-white'
+                              }`}
+                              style={isChecked ? { background: 'var(--brand-button, #1d4ed8)' } : {}}
+                            >
+                              {isChecked && <Check size={12} strokeWidth={3} />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className={`text-xs font-bold leading-tight ${isChecked ? 'text-gray-900' : 'text-gray-500'}`}>
+                                {field.label}
                               </p>
-                            )}
-                          </div>
-                        </button>
-                      )
-                    })}
+                              {field.sublabel && (
+                                <p className={`text-[10px] mt-0.5 font-medium leading-tight ${isChecked ? 'text-brand-700' : 'text-gray-400'}`}>
+                                  {field.sublabel}
+                                </p>
+                              )}
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    {/* Column 2: Photos & Observation detail fields */}
+                    <div className="flex flex-col gap-2.5">
+                      {[
+                        { id: 'photos',          label: 'Observation Photos' },
+                        {
+                          id: 'photosOnRight',
+                          label: 'Observation Images on Right Side',
+                          sublabel: exportFields.photosOnRight ? 'On the right side' : 'Below observation notes'
+                        },
+                        { id: 'dueDate',         label: 'Due Date' },
+                        { id: 'notes',           label: 'Pin Observation Description' },
+                        { id: 'attendees',       label: 'List of Attendees' },
+                        {
+                          id: 'reportAsTable',
+                          label: 'Report as Table',
+                          tag: 'Table Layout',
+                          sublabel: 'Category, Description, Photos, Drawing location'
+                        },
+                      ].map(field => {
+                        const isChecked = !!exportFields[field.id]
+                        return (
+                          <button
+                            key={field.id}
+                            type="button"
+                            onClick={() => toggleExportField(field.id)}
+                            className={`flex items-center gap-3 p-3 rounded-xl border text-left transition-all ${
+                              isChecked
+                                ? 'border-brand-500 bg-blue-50/50 shadow-2xs ring-1 ring-brand-300/60'
+                                : 'border-gray-200 bg-white hover:bg-gray-50/80 text-gray-500'
+                            }`}
+                          >
+                            <div
+                              className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
+                                isChecked
+                                  ? 'text-white'
+                                  : 'border-2 border-gray-300 bg-white'
+                              }`}
+                              style={isChecked ? { background: 'var(--brand-button, #1d4ed8)' } : {}}
+                            >
+                              {isChecked && <Check size={12} strokeWidth={3} />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <p className={`text-xs font-bold leading-tight ${isChecked ? 'text-gray-900' : 'text-gray-500'}`}>
+                                  {field.label}
+                                </p>
+                                {field.tag && (
+                                  <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${isChecked ? 'bg-brand-100 text-brand-800' : 'bg-gray-100 text-gray-500'}`}>
+                                    {field.tag}
+                                  </span>
+                                )}
+                              </div>
+                              {field.sublabel && (
+                                <p className={`text-[10px] mt-0.5 font-medium leading-tight ${isChecked ? 'text-brand-700' : 'text-gray-400'}`}>
+                                  {field.sublabel}
+                                </p>
+                              )}
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>

@@ -12,7 +12,9 @@ import {
   deletePunchItem,
   getPunchItems,
   getFloorPlan,
+  getFloorPlans,
   getFloorPlansByPhase,
+  getPhases,
   db,
   getPhotos,
   deletePhoto,
@@ -179,49 +181,102 @@ export default function PunchItemForm() {
     setPhotos(ph)
     initialLoadedUuid.current = currentPunchItemUuid
 
-    // Load sibling observations and notes from the same report / key plan
+    // Load sibling observations and notes from the WHOLE site visit report
     try {
       let pUuid = it.phaseUuid || currentPhaseUuid || null
       let projUuid = it.projectUuid || currentProjectUuid || null
 
-      if (!pUuid && it.floorPlanUuid) {
+      if (it.floorPlanUuid) {
         const fp = await getFloorPlan(it.floorPlanUuid)
+        if (fp) {
+          if (!pUuid) pUuid = fp.phaseUuid || null
+          if (!projUuid) projUuid = fp.projectUuid || null
+        }
+      }
+
+      if (!pUuid && currentFloorPlanUuid) {
+        const fp = await getFloorPlan(currentFloorPlanUuid)
         if (fp) {
           pUuid = fp.phaseUuid || null
           if (!projUuid) projUuid = fp.projectUuid || null
         }
       }
 
-      let allSiblings = []
-      if (currentFloorPlanUuid && it.floorPlanUuid === currentFloorPlanUuid) {
-        // Opened from a specific key plan
-        allSiblings = await db.punchItems.where('floorPlanUuid').equals(currentFloorPlanUuid).toArray()
-      } else if (pUuid) {
-        // Belonging to the site visit / report (and any key plans in this visit)
-        const phaseFps = await getFloorPlansByPhase(pUuid)
-        const fpSet = new Set(phaseFps.map(f => f.uuid))
-        if (it.floorPlanUuid) fpSet.add(it.floorPlanUuid)
+      if (projUuid && !pUuid) {
+        const projPhases = await getPhases(projUuid)
+        if (projPhases.length > 0) {
+          for (const ph of projPhases) {
+            const phFps = await getFloorPlansByPhase(ph.uuid)
+            if (phFps.some(f => f.uuid === it.floorPlanUuid || f.uuid === currentFloorPlanUuid)) {
+              pUuid = ph.uuid
+              break
+            }
+          }
+          if (!pUuid) {
+            pUuid = projPhases[0].uuid
+          }
+        }
+      }
 
-        const allProjItems = projUuid ? await getPunchItems(projUuid) : await db.punchItems.toArray()
-        allSiblings = allProjItems.filter(p => {
-          if (p.phaseUuid && String(p.phaseUuid).trim() === String(pUuid).trim()) return true
-          if (p.floorPlanUuid && fpSet.has(p.floorPlanUuid)) return true
-          return false
-        })
-      } else if (it.floorPlanUuid) {
-        allSiblings = await db.punchItems.where('floorPlanUuid').equals(it.floorPlanUuid).toArray()
+      // Fetch all floor plans in this site visit report to build fpSet and fpMap
+      let reportFps = []
+      if (pUuid) {
+        reportFps = await getFloorPlansByPhase(pUuid)
       } else if (projUuid) {
-        allSiblings = await getPunchItems(projUuid)
+        reportFps = await getFloorPlans(projUuid)
       } else {
-        allSiblings = await db.punchItems.toArray()
+        reportFps = await db.floorPlans.toArray()
       }
 
-      if (!allSiblings.some(s => s.uuid === it.uuid)) {
-        allSiblings.push(it)
-      }
+      const fpSet = new Set(reportFps.map(f => f.uuid))
+      if (it.floorPlanUuid) fpSet.add(it.floorPlanUuid)
+      if (currentFloorPlanUuid) fpSet.add(currentFloorPlanUuid)
+      const fpMap = new Map(reportFps.map(f => [f.uuid, f.name]))
 
-      // Sort logically by itemNumber (1, 2, 3...) then by createdAt
-      allSiblings.sort((a, b) => {
+      // Load all observations in the project (or db)
+      const allProjItems = projUuid ? await getPunchItems(projUuid) : await db.punchItems.toArray()
+
+      // Whole Site Visit Report observations:
+      // Includes all observations in this phase/site visit report (direct or via any of its key plans)
+      const wholeReportItems = allProjItems.filter(p => {
+        if (pUuid && p.phaseUuid && String(p.phaseUuid).trim() === String(pUuid).trim()) return true
+        if (p.floorPlanUuid && fpSet.has(p.floorPlanUuid)) return true
+        if (!pUuid) return true
+        return false
+      })
+
+      // Sibling observations for desktop left/right navigation (same drawing if opened from drawing, or report)
+      let planSiblings = []
+      if (currentFloorPlanUuid && it.floorPlanUuid === currentFloorPlanUuid) {
+        planSiblings = allProjItems.filter(p => p.floorPlanUuid === currentFloorPlanUuid)
+      } else {
+        planSiblings = [...wholeReportItems]
+      }
+      if (!planSiblings.some(s => s.uuid === it.uuid)) {
+        planSiblings.push(it)
+      }
+      planSiblings.sort((a, b) => {
+        const numA = Number(a.itemNumber)
+        const numB = Number(b.itemNumber)
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
+          return numA - numB
+        }
+        return (a.createdAt || 0) - (b.createdAt || 0)
+      })
+      setSiblings(planSiblings)
+
+      // Notes from the WHOLE Site Visit Report (not just current drawing):
+      const validNotes = wholeReportItems
+        .filter(p => p.uuid !== it.uuid && p.notes && stripHtmlToPlainText(p.notes).trim().length > 0)
+        .map(p => {
+          const drawingName = fpMap.get(p.floorPlanUuid) || ''
+          return {
+            ...p,
+            drawingName,
+          }
+        })
+
+      validNotes.sort((a, b) => {
         const numA = Number(a.itemNumber)
         const numB = Number(b.itemNumber)
         if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
@@ -230,14 +285,9 @@ export default function PunchItemForm() {
         return (a.createdAt || 0) - (b.createdAt || 0)
       })
 
-      setSiblings(allSiblings)
-
-      const validNotes = allSiblings
-        .filter(p => p.uuid !== it.uuid && p.notes && p.notes.trim().length > 0)
-
       setReportNotes(validNotes)
     } catch (err) {
-      console.error('Failed to load sibling observations:', err)
+      console.error('Failed to load site visit report observations:', err)
       setReportNotes([])
       setSiblings([])
     }
@@ -1021,7 +1071,9 @@ export default function PunchItemForm() {
     const notesMatch = (n.notes || '').toLowerCase().includes(q)
     const itemNumMatch = String(n.itemNumber || '').includes(q) || `#${n.itemNumber}`.includes(q)
     const tradeMatch = (n.trade || '').toLowerCase().includes(q)
-    return notesMatch || itemNumMatch || tradeMatch
+    const titleMatch = (n.title || '').toLowerCase().includes(q)
+    const drawingMatch = (n.drawingName || '').toLowerCase().includes(q)
+    return notesMatch || itemNumMatch || tradeMatch || titleMatch || drawingMatch
   })
 
   if (!item) {
@@ -1526,9 +1578,6 @@ export default function PunchItemForm() {
                     <span className="font-semibold text-gray-700">
                       {reuseSearch ? `Found ${filteredReportNotes.length} matching notes` : `All ${reportNotes.length} notes in report`}
                     </span>
-                    <span className="text-[10px] text-gray-400">
-                      Click note to append to observation
-                    </span>
                   </div>
 
                   <div className="overflow-y-auto max-h-[210px] divide-y divide-gray-100">
@@ -1553,18 +1602,13 @@ export default function PunchItemForm() {
                               #{n.itemNumber}
                             </span>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5 mb-0.5">
+                              <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
                                 <span className="text-xs font-bold text-gray-800">
                                   Observation #{n.itemNumber}
                                 </span>
-                                {n.trade && n.trade !== 'General' && (
-                                  <span className="text-[10px] px-1.5 py-0.2 rounded-full font-medium bg-gray-100 text-gray-600">
-                                    {n.trade}
-                                  </span>
-                                )}
-                                {n.priority && (
-                                  <span className="text-[10px] text-gray-400">
-                                    • {n.priority}
+                                {n.drawingName && (
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded-md font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                                    {n.drawingName}
                                   </span>
                                 )}
                               </div>
@@ -1572,9 +1616,6 @@ export default function PunchItemForm() {
                                 {cleanNote}
                               </p>
                             </div>
-                            <span className="text-[10px] font-semibold text-brand-600 bg-brand-50 border border-brand-200 px-2 py-0.5 rounded-lg flex-shrink-0 mt-0.5 group-hover:bg-brand-600 group-hover:text-white transition-colors">
-                              + Append
-                            </span>
                           </button>
                         )
                       })

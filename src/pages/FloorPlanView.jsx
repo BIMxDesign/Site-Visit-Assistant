@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   ArrowLeft, ZoomIn, ZoomOut, Maximize2, Filter,
-  Trash2, Plus, ChevronDown, ChevronUp, GripVertical, Check, FileImage, Edit2, Camera, ClipboardList, FileText,
+  Trash2, Plus, ChevronDown, ChevronUp, GripVertical, Check, FileImage, Edit2, Edit3, Camera, ClipboardList, FileText,
   Layers, ListOrdered, AlertCircle, Calendar, User, Home
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
@@ -9,6 +9,7 @@ import {
   db,
   getFloorPlan,
   getFloorPlans,
+  saveFloorPlan,
   deleteFloorPlan,
   getPunchItemsByFloorPlan,
   getPunchItem,
@@ -22,6 +23,7 @@ import {
 } from '../db/database'
 import { v4 as uuidv4 } from 'uuid'
 import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
+import PhotoAnnotator from '../components/PhotoAnnotator'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ObservationStatusSelect from '../components/ObservationStatusSelect'
 import { truncateObservationTitle, formatDatePattern, normalizeObservationStatus, stripHtmlToPlainText } from '../utils/formatters'
@@ -85,7 +87,46 @@ export default function FloorPlanView() {
 
   // Modals & Dropdowns
   const [showFpMenu,      setShowFpMenu]      = useState(false)
+  const fpMenuContainerRef = useRef(null)
   const [showRenameModal, setShowRenameModal] = useState(false)
+  const [showKeyPlanAnnotator, setShowKeyPlanAnnotator] = useState(false)
+
+  // Close Key Plan switcher dropdown on outside click
+  useEffect(() => {
+    if (!showFpMenu) return
+    const handleOutsideClick = (e) => {
+      if (fpMenuContainerRef.current && !fpMenuContainerRef.current.contains(e.target)) {
+        setShowFpMenu(false)
+      }
+    }
+    document.addEventListener('pointerdown', handleOutsideClick)
+    return () => document.removeEventListener('pointerdown', handleOutsideClick)
+  }, [showFpMenu])
+
+  // Reset image loaded and loading state when switching floor plans
+  useEffect(() => {
+    setImgLoaded(false)
+    setLoading(true)
+  }, [currentFloorPlanUuid])
+
+  // Save annotated key plan drawing back to database
+  const handleSaveKeyPlanAnnotation = async (annotatedDataUrl) => {
+    if (!floorPlan) return
+    try {
+      const updatedFp = {
+        ...floorPlan,
+        imageData: annotatedDataUrl,
+        updatedAt: new Date().toISOString(),
+      }
+      await saveFloorPlan(updatedFp)
+      setFloorPlan(updatedFp)
+      setAllFloorPlans(prev => prev.map(f => f.uuid === updatedFp.uuid ? updatedFp : f))
+      setShowKeyPlanAnnotator(false)
+    } catch (err) {
+      console.error('Failed to save key plan annotations:', err)
+      alert('Failed to save key plan annotations. Please try again.')
+    }
+  }
 
   // Pin Dragging state
   const [draggingPinId,  setDraggingPinId]  = useState(null)
@@ -998,9 +1039,13 @@ export default function FloorPlanView() {
         </button>
 
         {/* Floor plan switcher dropdown */}
-        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+        <div ref={fpMenuContainerRef} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
           <button
-            onClick={() => setShowFpMenu(m => !m)}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowFpMenu(m => !m)
+            }}
             className="liquid-pill px-3 py-1.5 rounded-xl text-white flex items-center gap-2 cursor-pointer w-full text-left"
             style={{ background: 'rgba(255, 255, 255, 0.22)' }}
           >
@@ -1022,52 +1067,50 @@ export default function FloorPlanView() {
             })
 
             return (
-              <>
-                {/* Click-outside backdrop to dismiss dropdown */}
-                <div
-                  className="fixed inset-0 z-50 cursor-default"
-                  onClick={() => setShowFpMenu(false)}
-                />
-
-                <div
-                  className="bg-white rounded-2xl p-2 shadow-2xl z-60 border border-gray-200 animate-fade-in"
-                  style={{
-                    position: 'absolute', left: 0, top: '115%',
-                    minWidth: 260, maxWidth: 340,
-                    background: '#ffffff',
-                    boxShadow: '0 20px 35px -5px rgba(0, 0, 0, 0.4), 0 10px 15px -5px rgba(0, 0, 0, 0.25)',
-                  }}
-                >
-                  <div style={{ padding: '6px 10px 8px', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Switch Key Plan
-                  </div>
-                  <div style={{ maxHeight: 260, overflowY: 'auto' }} className="space-y-1">
-                    {currentPhaseFps.map(f => (
-                      <button
-                        key={f.uuid}
-                        onClick={() => {
-                          navigateToFloorPlan(currentProjectUuid, f.uuid, f.phaseUuid || currentPhaseUuid)
-                          setShowFpMenu(false)
-                        }}
-                        className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between cursor-pointer transition-colors hover:bg-gray-100 active:bg-gray-200"
-                        style={{
-                          background: f.uuid === currentFloorPlanUuid ? 'var(--brand-50, #eff6ff)' : 'transparent',
-                          color:      f.uuid === currentFloorPlanUuid ? 'var(--brand-color, #1d4ed8)' : '#0f172a',
-                          fontWeight: f.uuid === currentFloorPlanUuid ? 700 : 600,
-                        }}
-                      >
-                        <span className="truncate">{f.name}</span>
-                        {f.uuid === currentFloorPlanUuid && <Check size={14} className="text-brand-600 flex-shrink-0 ml-2" />}
-                      </button>
-                    ))}
-                    {currentPhaseFps.length === 0 && (
-                      <div style={{ padding: '12px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
-                        No other key plans in this site visit
-                      </div>
-                    )}
-                  </div>
+              <div
+                className="bg-white rounded-2xl p-2 shadow-2xl border border-gray-200 animate-fade-in"
+                style={{
+                  position: 'absolute', left: 0, top: '115%',
+                  minWidth: 260, maxWidth: 340,
+                  zIndex: 100,
+                  background: '#ffffff',
+                  boxShadow: '0 20px 35px -5px rgba(0, 0, 0, 0.4), 0 10px 15px -5px rgba(0, 0, 0, 0.25)',
+                }}
+              >
+                <div style={{ padding: '6px 10px 8px', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Switch Key Plan
                 </div>
-              </>
+                <div style={{ maxHeight: 260, overflowY: 'auto' }} className="space-y-1">
+                  {currentPhaseFps.map(f => (
+                    <button
+                      key={f.uuid}
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setShowFpMenu(false)
+                        if (f.uuid !== currentFloorPlanUuid) {
+                          navigateToFloorPlan(currentProjectUuid, f.uuid, f.phaseUuid || currentPhaseUuid)
+                        }
+                      }}
+                      className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between cursor-pointer transition-colors hover:bg-gray-100 active:bg-gray-200"
+                      style={{
+                        background: f.uuid === currentFloorPlanUuid ? 'var(--brand-50, #eff6ff)' : 'transparent',
+                        color:      f.uuid === currentFloorPlanUuid ? 'var(--brand-color, #1d4ed8)' : '#0f172a',
+                        fontWeight: f.uuid === currentFloorPlanUuid ? 700 : 600,
+                      }}
+                    >
+                      <span className="truncate">{f.name}</span>
+                      {f.uuid === currentFloorPlanUuid && <Check size={14} className="text-brand-600 flex-shrink-0 ml-2" />}
+                    </button>
+                  ))}
+                  {currentPhaseFps.length === 0 && (
+                    <div style={{ padding: '12px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
+                      No other key plans in this site visit
+                    </div>
+                  )}
+                </div>
+              </div>
             )
           })()}
         </div>
@@ -1153,6 +1196,7 @@ export default function FloorPlanView() {
             <>
               {/* ── Floor plan image ── */}
               <img
+                key={floorPlan?.uuid || 'empty'}
                 src={floorPlan.imageData}
                 alt={floorPlan.name}
                 onLoad={onImageLoad}
@@ -1410,7 +1454,7 @@ export default function FloorPlanView() {
             <ZoomBtn label="⤢" title="Fit to screen" onClick={fitToScreen} style={{ fontSize: 14 }} />
           </div>
 
-          {/* ── Pin count & Photo Preview toggle button (replaces drag badge) ── */}
+          {/* ── Pin count, Photo Preview toggle, and Key Plan Annotation button ── */}
           <div
             data-no-canvas-click="true"
             onMouseDown={e => e.stopPropagation()}
@@ -1441,11 +1485,40 @@ export default function FloorPlanView() {
                 gap: 5,
                 cursor: 'pointer',
               }}
-              title={showPhotoPreviews ? 'Pin Photo Previews: ON (Click to hide photos on pins)' : 'Pin Photo Previews: OFF (Click to show photos on pins)'}
+              title={showPhotoPreviews ? 'Pin Photo Previews: Shown (Click to hide photos on pins)' : 'Pin Photo Previews: Hidden (Click to show photos on pins)'}
             >
               <Camera size={13} className={showPhotoPreviews ? 'text-white' : 'text-gray-300'} />
-              <span>{showPhotoPreviews ? 'Photos: ON' : 'Photos: OFF'}</span>
+              <span>Photos</span>
             </button>
+
+            {floorPlan?.imageData && (
+              <button
+                type="button"
+                data-no-canvas-click="true"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowKeyPlanAnnotator(true)
+                }}
+                className="transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-md"
+                style={{
+                  background: 'rgba(0,0,0,0.65)',
+                  color: 'white',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '3px 10px',
+                  borderRadius: 999,
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  cursor: 'pointer',
+                }}
+                title="Annotate Key Plan (Draw clouds, arrows, text, lines)"
+              >
+                <Edit3 size={13} className="text-amber-400" />
+                <span>Annotate</span>
+              </button>
+            )}
           </div>
 
           {/* ── Scale indicator ── */}
@@ -1790,6 +1863,17 @@ export default function FloorPlanView() {
             }))
             load()
           }}
+        />
+      )}
+
+      {/* ── Key Plan Annotation Tool Overlay ── */}
+      {showKeyPlanAnnotator && floorPlan?.imageData && (
+        <PhotoAnnotator
+          imageDataUrl={floorPlan.imageData}
+          photoQuality="original"
+          saveButtonLabel="Save Key Plan"
+          onSave={handleSaveKeyPlanAnnotation}
+          onCancel={() => setShowKeyPlanAnnotator(false)}
         />
       )}
 

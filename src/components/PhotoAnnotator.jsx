@@ -3,8 +3,45 @@ import { getAnnotatorExportOptions, getStoredPhotoQuality } from '../utils/media
 import {
   X, ArrowRight, Pen, Hand, Crop, MousePointer, Type, Eraser,
   Undo2, Redo2, Trash2, Check,
-  ZoomIn, ZoomOut, Maximize2
+  ZoomIn, ZoomOut, Maximize2, ChevronDown
 } from 'lucide-react'
+
+// Custom icons for Rectangle and Circle shapes
+function RectangleIcon({ size = 16, className = '' }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLineCap="round"
+      strokeLineJoin="round"
+      className={className}
+    >
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+    </svg>
+  )
+}
+
+function CircleIcon({ size = 16, className = '' }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLineCap="round"
+      strokeLineJoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="9" />
+    </svg>
+  )
+}
 
 // Construction / Architectural Revision Cloud Icon
 function ConstructionCloudIcon({ size = 18, className = '' }) {
@@ -28,17 +65,31 @@ function ConstructionCloudIcon({ size = 18, className = '' }) {
 // Exactly 3 primary markup colors
 const THREE_COLORS = ['#ef4444', '#f59e0b', '#3b82f6']
 
-const TOOLS = [
-  { id: 'select', icon: <MousePointer size={16} />,          label: 'Select' },
-  { id: 'cloud',  icon: <ConstructionCloudIcon size={18} />, label: 'Cloud' },
-  { id: 'arrow',  icon: <ArrowRight size={16} />,             label: 'Arrow' },
-  { id: 'pen',    icon: <Pen size={16} />,                    label: 'Pen' },
-  { id: 'text',   icon: <Type size={16} />,                   label: 'Text' },
-  { id: 'pan',    icon: <Hand size={16} />,                   label: 'Pan' },
-  { id: 'crop',   icon: <Crop size={16} />,                   label: 'Crop' },
+// Proportional dash array for dashed lines matching architectural drafting standards
+function getDashArray(strokeWidth = 3) {
+  const w = Number(strokeWidth) || 3
+  return [Math.max(10, Math.round(w * 2.5)), Math.max(6, Math.round(w * 1.6))]
+}
+
+const SELECT_TOOLS = [
+  { id: 'select', label: 'Select', icon: <MousePointer size={15} /> },
+  { id: 'pan',    label: 'Pan',    icon: <Hand size={15} /> },
+  { id: 'crop',   label: 'Crop',   icon: <Crop size={15} /> },
 ]
 
-export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onCancel }) {
+const SHAPES = [
+  { id: 'rectangle', label: 'Rectangle', icon: <RectangleIcon size={16} /> },
+  { id: 'circle',    label: 'Circle',    icon: <CircleIcon size={16} /> },
+  { id: 'cloud',     label: 'Cloud',     icon: <ConstructionCloudIcon size={17} /> },
+  { id: 'arrow',     label: 'Arrow',     icon: <ArrowRight size={15} /> },
+]
+
+const OTHER_TOOLS = [
+  { id: 'pen',  label: 'Pen',  icon: <Pen size={15} /> },
+  { id: 'text', label: 'Text', icon: <Type size={15} /> },
+]
+
+export default function PhotoAnnotator({ imageDataUrl, photoQuality, saveButtonLabel = 'Save Photo', onSave, onCancel }) {
   const canvasRef  = useRef(null)
   const overlayRef = useRef(null)
   const imageMetaRef = useRef({ naturalWidth: 0, naturalHeight: 0, canvasWidth: 0, canvasHeight: 0 })
@@ -46,9 +97,17 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   const [activeImageSrc, setActiveImageSrc] = useState(imageDataUrl)
   const [imageHistory,   setImageHistory]   = useState([])
 
-  const [tool,        setTool]        = useState('cloud')
+  const [tool,               setTool]               = useState('cloud')
+  const [selectedShape,      setSelectedShape]      = useState('cloud')
+  const [selectMode,         setSelectMode]         = useState('select')
+  const [showShapesMenu,     setShowShapesMenu]     = useState(false)
+  const [showSelectMenu,     setShowSelectMenu]     = useState(false)
+  const shapesMenuRef = useRef(null)
+  const selectMenuRef = useRef(null)
+
   const [color,       setColor]       = useState('#ef4444')
   const [strokeW,     setStrokeW]     = useState(3)
+  const [lineType,    setLineType]    = useState('solid') // 'solid' | 'dash'
   const [canUndo,     setCanUndo]     = useState(false)
   const [canRedo,     setCanRedo]     = useState(false)
   const [selectedObj, setSelectedObj] = useState(null)
@@ -83,6 +142,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   const toolRef      = useRef('cloud')
   const colorRef     = useRef('#ef4444')
   const strokeWRef   = useRef(3)
+  const lineTypeRef  = useRef('solid')
   const fabricRef    = useRef(null)
   const FabricLibRef = useRef(null)
 
@@ -95,9 +155,10 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   const undoStack = useRef([])
   const redoStack = useRef([])
 
-  useEffect(() => { toolRef.current    = tool    }, [tool])
-  useEffect(() => { colorRef.current   = color   }, [color])
-  useEffect(() => { strokeWRef.current = strokeW }, [strokeW])
+  useEffect(() => { toolRef.current     = tool     }, [tool])
+  useEffect(() => { colorRef.current    = color    }, [color])
+  useEffect(() => { strokeWRef.current  = strokeW  }, [strokeW])
+  useEffect(() => { lineTypeRef.current = lineType }, [lineType])
 
   useEffect(() => {
     panOffsetRef.current = panOffset
@@ -115,7 +176,9 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
         e.stopImmediatePropagation()
         if (isCropping) {
           setIsCropping(false)
-          setTool('cloud')
+          setSelectMode('select')
+          setTool('select')
+          toolRef.current = 'select'
           return
         }
         onCancel()
@@ -141,18 +204,22 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  // Close line weight popup on click outside
+  // Close line weight popup, shapes menu, and select menu on click outside
   useEffect(() => {
     function handleClickOutside(e) {
       if (strokePopupRef.current && !strokePopupRef.current.contains(e.target)) {
         setShowStrokePopup(false)
       }
+      if (shapesMenuRef.current && !shapesMenuRef.current.contains(e.target)) {
+        setShowShapesMenu(false)
+      }
+      if (selectMenuRef.current && !selectMenuRef.current.contains(e.target)) {
+        setShowSelectMenu(false)
+      }
     }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
+    document.addEventListener('pointerdown', handleClickOutside)
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
+      document.removeEventListener('pointerdown', handleClickOutside)
     }
   }, [])
 
@@ -254,6 +321,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
         if (toolRef.current === 'pen' && fab.freeDrawingBrush) {
           fab.freeDrawingBrush.color = colorRef.current
           fab.freeDrawingBrush.width = strokeWRef.current
+          fab.freeDrawingBrush.strokeDashArray = lineTypeRef.current === 'dash' ? getDashArray(strokeWRef.current) : null
         }
 
         // Set background image
@@ -287,9 +355,26 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
           })
         })
 
-        // Selection listeners
-        fab.on('selection:created', (e) => setSelectedObj(e.selected ? e.selected[0] : null))
-        fab.on('selection:updated', (e) => setSelectedObj(e.selected ? e.selected[0] : null))
+        // Selection listeners: detect object stroke / dash properties
+        const handleSelection = (e) => {
+          const obj = e.selected ? e.selected[0] : null
+          setSelectedObj(obj)
+          if (obj) {
+            let dash = obj.strokeDashArray
+            if (!dash && obj.type === 'group' && obj.getObjects) {
+              dash = obj.getObjects()[0]?.strokeDashArray
+            }
+            if (dash && Array.isArray(dash) && dash.length > 0) {
+              setLineType('dash')
+              lineTypeRef.current = 'dash'
+            } else if (obj.stroke || obj.type === 'path' || obj.type === 'group' || obj.type === 'rect' || obj.type === 'ellipse') {
+              setLineType('solid')
+              lineTypeRef.current = 'solid'
+            }
+          }
+        }
+        fab.on('selection:created', handleSelection)
+        fab.on('selection:updated', handleSelection)
         fab.on('selection:cleared', () => setSelectedObj(null))
 
         // Drawing & interaction listeners
@@ -314,7 +399,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     }
   }, [activeImageSrc])
 
-  // Update free drawing mode / cursor / selection whenever tool/color/stroke changes
+  // Update free drawing mode / cursor / selection whenever tool/color/stroke/lineType changes
   useEffect(() => {
     const fab = fabricRef.current
     if (!fab) return
@@ -343,6 +428,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       if (fab.freeDrawingBrush) {
         fab.freeDrawingBrush.color = color
         fab.freeDrawingBrush.width = strokeW
+        fab.freeDrawingBrush.strokeDashArray = lineType === 'dash' ? getDashArray(strokeW) : null
       }
     } else if (tool === 'pan') {
       fab.isDrawingMode = false
@@ -377,7 +463,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       })
     }
     fab.renderAll()
-  }, [tool, color, strokeW])
+  }, [tool, color, strokeW, lineType])
 
   // ── Drawing, Selection & Panning Events ───────────────────────────────────
   function getPointer(e) {
@@ -478,7 +564,64 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
     let obj = null
 
-    if (currentTool === 'arrow') {
+    const isDash = lineTypeRef.current === 'dash'
+    const dash = isDash ? getDashArray(strokeWidth) : null
+
+    if (currentTool === 'rectangle') {
+      const left   = Math.min(ox, x)
+      const top    = Math.min(oy, y)
+      const width  = Math.abs(x - ox)
+      const height = Math.abs(y - oy)
+      if (width > 3 && height > 3) {
+        obj = new Fabric.Rect({
+          left,
+          top,
+          width,
+          height,
+          originX: 'left',
+          originY: 'top',
+          stroke: strokeColor,
+          strokeWidth,
+          strokeDashArray: dash,
+          fill: 'transparent',
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          selectable: false,
+          cornerColor: '#3b82f6',
+          cornerSize: 8,
+          transparentCorners: false,
+        })
+      }
+    } else if (currentTool === 'circle') {
+      const left   = Math.min(ox, x)
+      const top    = Math.min(oy, y)
+      const width  = Math.abs(x - ox)
+      const height = Math.abs(y - oy)
+      const rx     = width / 2
+      const ry     = height / 2
+      if (rx > 2 && ry > 2) {
+        obj = new Fabric.Ellipse({
+          left,
+          top,
+          rx,
+          ry,
+          originX: 'left',
+          originY: 'top',
+          stroke: strokeColor,
+          strokeWidth,
+          strokeDashArray: dash,
+          fill: 'transparent',
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          selectable: false,
+          cornerColor: '#3b82f6',
+          cornerSize: 8,
+          transparentCorners: false,
+        })
+      }
+    } else if (currentTool === 'cloud') {
+      obj = drawCloud(Fabric, ox, oy, x, y, strokeColor, strokeWidth, dash)
+    } else if (currentTool === 'arrow') {
       const dx  = x - ox
       const dy  = y - oy
       const len = Math.hypot(dx, dy)
@@ -490,21 +633,47 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
         const y1 = y - aLen * Math.sin(angle - arrowAngle)
         const x2 = x - aLen * Math.cos(angle + arrowAngle)
         const y2 = y - aLen * Math.sin(angle + arrowAngle)
-        const pathData = `M ${ox} ${oy} L ${x} ${y} M ${x1} ${y1} L ${x} ${y} L ${x2} ${y2}`
-        obj = new Fabric.Path(pathData, {
-          stroke: strokeColor,
-          strokeWidth,
-          fill: '',
-          strokeLineCap: 'round',
-          strokeLineJoin: 'round',
-          selectable: false,
-          cornerColor: '#3b82f6',
-          cornerSize: 8,
-          transparentCorners: false,
-        })
+        if (isDash) {
+          const shaft = new Fabric.Path(`M ${ox} ${oy} L ${x} ${y}`, {
+            stroke: strokeColor,
+            strokeWidth,
+            strokeDashArray: dash,
+            fill: '',
+            strokeLineCap: 'round',
+            strokeLineJoin: 'round',
+          })
+          const head = new Fabric.Path(`M ${x1} ${y1} L ${x} ${y} L ${x2} ${y2}`, {
+            stroke: strokeColor,
+            strokeWidth,
+            strokeDashArray: null,
+            fill: '',
+            strokeLineCap: 'round',
+            strokeLineJoin: 'round',
+          })
+          obj = new Fabric.Group([shaft, head], {
+            selectable: false,
+            cornerColor: '#3b82f6',
+            cornerSize: 8,
+            transparentCorners: false,
+          })
+        } else {
+          const pathData = `M ${ox} ${oy} L ${x} ${y} M ${x1} ${y1} L ${x} ${y} L ${x2} ${y2}`
+          obj = new Fabric.Path(pathData, {
+            stroke: strokeColor,
+            strokeWidth,
+            strokeDashArray: null,
+            fill: '',
+            strokeLineCap: 'round',
+            strokeLineJoin: 'round',
+            selectable: false,
+            cornerColor: '#3b82f6',
+            cornerSize: 8,
+            transparentCorners: false,
+          })
+        }
       }
     } else if (currentTool === 'cloud') {
-      obj = drawCloud(Fabric, ox, oy, x, y, strokeColor, strokeWidth)
+      obj = drawCloud(Fabric, ox, oy, x, y, strokeColor, strokeWidth, dash)
     }
 
     if (obj) {
@@ -537,6 +706,10 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
   function onPathCreated(e) {
     if (e && e.path) {
+      const dash = lineTypeRef.current === 'dash' ? getDashArray(strokeWRef.current) : null
+      if (dash) {
+        e.path.set('strokeDashArray', dash)
+      }
       e.path.set({
         selectable: toolRef.current === 'select',
         evented: toolRef.current === 'select',
@@ -702,6 +875,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   // ── Crop Handling ─────────────────────────────────────────────────────────
   const handleStartCrop = () => {
     setIsCropping(true)
+    setSelectMode('crop')
     setTool('crop')
     toolRef.current = 'crop'
     handleResetZoom()
@@ -709,14 +883,18 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
   const handleCancelCrop = () => {
     setIsCropping(false)
-    setTool('cloud')
-    toolRef.current = 'cloud'
+    setSelectMode('select')
+    setTool('select')
+    toolRef.current = 'select'
   }
 
   const handleApplyCrop = () => {
     const { canvasWidth, canvasHeight } = imageMetaRef.current
     if (!canvasWidth || !canvasHeight) {
       setIsCropping(false)
+      setSelectMode('select')
+      setTool('select')
+      toolRef.current = 'select'
       return
     }
 
@@ -732,6 +910,9 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
       if (sw < 15 || sh < 15) {
         setIsCropping(false)
+        setSelectMode('select')
+        setTool('select')
+        toolRef.current = 'select'
         return
       }
 
@@ -745,8 +926,9 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       setImageHistory(prev => [...prev, activeImageSrc])
       setActiveImageSrc(croppedUrl)
       setIsCropping(false)
-      setTool('cloud')
-      toolRef.current = 'cloud'
+      setSelectMode('select')
+      setTool('select')
+      toolRef.current = 'select'
     }
     img.src = activeImageSrc
   }
@@ -848,6 +1030,12 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     if (isCropping) {
       setIsCropping(false)
     }
+    if (['select', 'pan'].includes(id)) {
+      setSelectMode(id)
+    }
+    if (['rectangle', 'circle', 'cloud', 'arrow'].includes(id)) {
+      setSelectedShape(id)
+    }
     setTool(id)
     toolRef.current = id
   }
@@ -865,6 +1053,11 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       if (active) {
         if (active.type === 'i-text' || active.type === 'text') {
           active.set('fill', c)
+        } else if (active.type === 'group' && active.getObjects) {
+          active.getObjects().forEach(o => {
+            if (o.type === 'i-text' || o.type === 'text') o.set('fill', c)
+            else o.set('stroke', c)
+          })
         } else {
           active.set('stroke', c)
         }
@@ -876,42 +1069,217 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   function handleSetStrokeWidth(w) {
     setStrokeW(w)
     strokeWRef.current = w
+    const dash = lineTypeRef.current === 'dash' ? getDashArray(w) : null
     const fab = fabricRef.current
     if (fab && fab.freeDrawingBrush) {
       fab.freeDrawingBrush.width = w
+      fab.freeDrawingBrush.strokeDashArray = dash
     }
     if (fab) {
       const active = fab.getActiveObject()
       if (active && active.type !== 'i-text' && active.type !== 'text') {
-        active.set('strokeWidth', w)
+        if (active.type === 'group' && active.getObjects) {
+          active.getObjects().forEach(o => {
+            o.set('strokeWidth', w)
+            if (o.strokeDashArray) o.set('strokeDashArray', dash)
+          })
+        } else {
+          active.set('strokeWidth', w)
+          if (active.strokeDashArray) active.set('strokeDashArray', dash)
+        }
         fab.renderAll()
       }
     }
   }
 
+  function handleSetLineType(type) {
+    setLineType(type)
+    lineTypeRef.current = type
+    const dash = type === 'dash' ? getDashArray(strokeWRef.current) : null
+    const fab = fabricRef.current
+    if (fab) {
+      if (fab.freeDrawingBrush) {
+        fab.freeDrawingBrush.strokeDashArray = dash
+      }
+      const active = fab.getActiveObject()
+      if (active && active.type !== 'i-text' && active.type !== 'text') {
+        if (active.type === 'group' && active.getObjects) {
+          active.getObjects().forEach(o => {
+            o.set('strokeDashArray', dash)
+          })
+        } else {
+          active.set('strokeDashArray', dash)
+        }
+        fab.renderAll()
+      }
+    }
+  }
+
+  const isShapeActive = ['rectangle', 'circle', 'cloud', 'arrow'].includes(tool) && !isCropping
+  const isSelectActive = (tool === 'select' || tool === 'pan' || isCropping)
+  const currentShapeObj = SHAPES.find(s => s.id === selectedShape) || SHAPES[2] // defaults to Cloud
+  const currentSelectToolObj = SELECT_TOOLS.find(s => s.id === (isCropping ? 'crop' : selectMode)) || SELECT_TOOLS[0]
+
+  const handleShapesButtonClick = (e) => {
+    e.stopPropagation()
+    if (!isShapeActive) {
+      handleSelectTool(selectedShape)
+    }
+    setShowShapesMenu(prev => !prev)
+    setShowSelectMenu(false)
+    setShowStrokePopup(false)
+  }
+
+  const handleSelectButtonClick = (e) => {
+    e.stopPropagation()
+    if (!isSelectActive) {
+      handleSelectTool(selectMode)
+    }
+    setShowSelectMenu(prev => !prev)
+    setShowShapesMenu(false)
+    setShowStrokePopup(false)
+  }
+
   return (
     <div ref={overlayRef} className="fixed inset-0 z-[60] bg-gray-900 flex flex-col select-none">
-      {/* Top toolbar - Responsive Layout with max-w-4xl desktop alignment */}
+      {/* Top toolbar - Responsive Single-Line Layout */}
       <div
-        className="bg-gray-800 border-b border-gray-700 px-3 py-2 flex-shrink-0"
+        className="relative z-30 bg-gray-800 border-b border-gray-700 px-2 sm:px-4 py-1.5 flex-shrink-0"
         style={{
-          paddingTop: 'calc(8px + env(safe-area-inset-top, 0px))',
-          paddingLeft: 'calc(12px + env(safe-area-inset-left, 0px))',
-          paddingRight: 'calc(12px + env(safe-area-inset-right, 0px))',
+          paddingTop: 'calc(6px + env(safe-area-inset-top, 0px))',
+          paddingLeft: 'calc(8px + env(safe-area-inset-left, 0px))',
+          paddingRight: 'calc(8px + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex flex-wrap items-center justify-center sm:justify-between gap-2 max-w-4xl mx-auto w-full">
-          {/* Tool buttons: Centered on phone view, left-aligned on desktop */}
-          <div className="flex items-center justify-center gap-1 sm:gap-1.5 flex-wrap w-full sm:w-auto">
-            {TOOLS.map(t => {
-              const isActive = (tool === t.id && !isCropping) || (t.id === 'crop' && isCropping)
+        <div className="flex items-center justify-between gap-1 sm:gap-2 max-w-4xl mx-auto w-full py-0.5">
+          {/* Tool buttons group */}
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
+            {/* Select / Pan / Crop Dropdown */}
+            <div className="relative" ref={selectMenuRef}>
+              <button
+                type="button"
+                onClick={handleSelectButtonClick}
+                title={`Select tool (${currentSelectToolObj.label})`}
+                className={`flex flex-col items-center justify-center px-1.5 sm:px-2 py-1 rounded-xl transition-all min-w-[38px] sm:min-w-[42px] cursor-pointer ${
+                  isSelectActive
+                    ? 'bg-brand-600 text-white shadow-sm ring-1 ring-white/30'
+                    : 'text-gray-300 hover:text-white hover:bg-gray-700/80'
+                }`}
+              >
+                <div className="flex items-center gap-0.5">
+                  {currentSelectToolObj.icon}
+                  <ChevronDown size={11} className="opacity-70 -mr-0.5" />
+                </div>
+                <span className="text-[10px] leading-tight font-medium mt-0.5">
+                  {currentSelectToolObj.label}
+                </span>
+              </button>
+
+              {showSelectMenu && (
+                <div
+                  className="absolute top-full left-0 mt-2 z-[70] bg-gray-900 border border-gray-700 rounded-xl p-1.5 shadow-2xl backdrop-blur-md flex flex-col gap-1 min-w-[125px] animate-fade-in"
+                  style={{ minWidth: '125px' }}
+                >
+                  {SELECT_TOOLS.map(st => {
+                    const isSelected = isCropping ? st.id === 'crop' : tool === st.id
+                    return (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectMode(st.id)
+                          handleSelectTool(st.id)
+                          setShowSelectMenu(false)
+                        }}
+                        className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-brand-600 text-white shadow-xs'
+                            : 'text-gray-300 hover:text-white hover:bg-gray-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {st.icon}
+                          <span>{st.label}</span>
+                        </div>
+                        {isSelected && <Check size={13} strokeWidth={3} />}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Shapes Dropdown (Rectangle, Circle, Cloud, Arrow) */}
+            <div className="relative" ref={shapesMenuRef}>
+              <button
+                type="button"
+                onClick={handleShapesButtonClick}
+                title={`Shapes (${currentShapeObj?.label || 'Cloud'})`}
+                className={`flex flex-col items-center justify-center px-1.5 sm:px-2 py-1 rounded-xl transition-all min-w-[38px] sm:min-w-[42px] cursor-pointer ${
+                  isShapeActive
+                    ? 'bg-brand-600 text-white shadow-sm ring-1 ring-white/30'
+                    : 'text-gray-300 hover:text-white hover:bg-gray-700/80'
+                }`}
+              >
+                <div className="flex items-center gap-0.5">
+                  {currentShapeObj?.icon || <ConstructionCloudIcon size={17} />}
+                  <ChevronDown size={11} className="opacity-70 -mr-0.5" />
+                </div>
+                <span className="text-[10px] leading-tight font-medium mt-0.5">
+                  {currentShapeObj?.label || 'Cloud'}
+                </span>
+              </button>
+
+              {showShapesMenu && (
+                <div
+                  className="absolute top-full left-0 mt-2 z-[70] bg-gray-900 border border-gray-700 rounded-xl p-1.5 shadow-2xl backdrop-blur-md flex flex-col gap-1 min-w-[135px] animate-fade-in"
+                  style={{ minWidth: '135px' }}
+                >
+                  {SHAPES.map(s => {
+                    const isSelected = !isCropping && tool === s.id
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedShape(s.id)
+                          handleSelectTool(s.id)
+                          setShowShapesMenu(false)
+                        }}
+                        className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-brand-600 text-white shadow-xs'
+                            : 'text-gray-300 hover:text-white hover:bg-gray-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {s.icon}
+                          <span>{s.label}</span>
+                        </div>
+                        {isSelected && <Check size={13} strokeWidth={3} />}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Other Tools: Pen, Text */}
+            {OTHER_TOOLS.map(t => {
+              const isActive = tool === t.id && !isCropping
               return (
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => handleSelectTool(t.id)}
+                  onClick={() => {
+                    setShowSelectMenu(false)
+                    setShowShapesMenu(false)
+                    handleSelectTool(t.id)
+                  }}
                   title={t.label}
-                  className={`flex flex-col items-center justify-center px-2 py-1 rounded-xl transition-all min-w-[40px] sm:min-w-[42px] cursor-pointer ${
+                  className={`flex flex-col items-center justify-center px-1.5 sm:px-2 py-1 rounded-xl transition-all min-w-[34px] sm:min-w-[38px] cursor-pointer ${
                     isActive
                       ? 'bg-brand-600 text-white shadow-sm ring-1 ring-white/30'
                       : 'text-gray-300 hover:text-white hover:bg-gray-700/80'
@@ -924,124 +1292,161 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
             })}
           </div>
 
-          {/* Secondary Controls (Color Selection + Undo/Redo/Eraser): Centered on phone view */}
-          <div className="flex items-center justify-center gap-2.5 sm:gap-4 flex-wrap">
-            {/* 3 Color Selection with Line Weight Popup Below */}
-            <div className="relative" ref={strokePopupRef}>
-              <div className="flex items-center gap-2 bg-gray-900/60 p-1.5 px-2.5 rounded-xl border border-gray-700/80">
-                <span className="text-[10px] uppercase font-bold text-gray-400 mr-0.5 hidden xs:inline">Color</span>
-                {THREE_COLORS.map(c => {
-                  const isSelected = color === c
-                  return (
+          {/* Divider */}
+          <div className="h-6 w-px bg-gray-700 flex-shrink-0 mx-0.5" />
+
+          {/* 3 Color Selection with Line Weight Popup Below */}
+          <div className="relative flex-shrink-0" ref={strokePopupRef}>
+            <div className="flex items-center gap-1.5 sm:gap-2 bg-gray-900/60 p-1 sm:p-1.5 px-2 rounded-xl border border-gray-700/80">
+              {THREE_COLORS.map(c => {
+                const isSelected = color === c
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => {
+                      setShowSelectMenu(false)
+                      setShowShapesMenu(false)
+                      handleSelectColor(c)
+                      setShowStrokePopup(prev => isSelected ? !prev : true)
+                    }}
+                    className={`w-6 h-6 sm:w-6 sm:h-6 rounded-full flex-shrink-0 transition-all cursor-pointer relative shadow-sm ${
+                      isSelected
+                        ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900 scale-105'
+                        : 'opacity-80 hover:opacity-100 hover:scale-105'
+                    }`}
+                    style={{ background: c }}
+                    title={`Select color (Click to change line weight & type)`}
+                  >
+                    {isSelected && (
+                      <span className="absolute inset-0 flex items-center justify-center text-white drop-shadow-xs">
+                        <Check size={12} strokeWidth={3} />
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Line Weight Selection Pop-up Directly Below Color Selection (Screen-Clamped) */}
+            {showStrokePopup && (
+              <div
+                className="absolute top-full mt-2 z-50 bg-gray-900 border border-gray-700 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex flex-col gap-2.5 animate-fade-in"
+                style={popupStyle}
+              >
+                <div className="flex items-center justify-between text-xs text-gray-300 pb-1.5 border-b border-gray-800">
+                  <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400">Line Weight</span>
+                  <span className="font-mono font-bold text-white bg-gray-800 px-2 py-0.5 rounded-md border border-gray-700 text-xs">
+                    {strokeW}px
+                  </span>
+                </div>
+
+                {/* Preset Thickness Options with Live Stroke Preview in the Active Color */}
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { label: 'Fine',  w: 2 },
+                    { label: 'Med',   w: 4 },
+                    { label: 'Thick', w: 7 },
+                    { label: 'Heavy', w: 12 },
+                  ].map(preset => {
+                    const isActive = strokeW === preset.w
+                    return (
+                      <button
+                        key={preset.w}
+                        type="button"
+                        onClick={() => handleSetStrokeWidth(preset.w)}
+                        className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
+                          isActive
+                            ? 'bg-gray-800 border-white/60 text-white shadow-xs'
+                            : 'bg-gray-950/60 border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800/80'
+                        }`}
+                        title={`${preset.label} (${preset.w}px)`}
+                      >
+                        <div
+                          className="w-full rounded-full mb-1.5 transition-all"
+                          style={{
+                            height: `${Math.min(10, Math.max(2, preset.w))}px`,
+                            background: color,
+                          }}
+                        />
+                        <span className="text-[10px] font-semibold">{preset.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Line Type Toggle inside Line Weight popup */}
+                <div className="flex items-center justify-between pt-2 border-t border-gray-800 text-xs">
+                  <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400">Line Type</span>
+                  <div className="flex items-center gap-1 bg-gray-950 p-1 rounded-xl border border-gray-800">
                     <button
-                      key={c}
                       type="button"
-                      onClick={() => {
-                        handleSelectColor(c)
-                        setShowStrokePopup(prev => isSelected ? !prev : true)
-                      }}
-                      className={`w-7 h-7 sm:w-6 sm:h-6 rounded-full flex-shrink-0 transition-all cursor-pointer relative shadow-sm ${
-                        isSelected
-                          ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900 scale-110'
-                          : 'opacity-80 hover:opacity-100 hover:scale-105'
+                      onClick={() => handleSetLineType('solid')}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                        lineType === 'solid' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-400 hover:text-white'
                       }`}
-                      style={{ background: c }}
-                      title={`Select color (Click to change line weight)`}
                     >
-                      {isSelected && (
-                        <span className="absolute inset-0 flex items-center justify-center text-white drop-shadow-xs">
-                          <Check size={13} strokeWidth={3} />
-                        </span>
-                      )}
+                      <svg width="18" height="8" viewBox="0 0 18 8" className={lineType === 'solid' ? 'text-white' : 'text-gray-400'}>
+                        <line x1="1" y1="4" x2="17" y2="4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                      </svg>
+                      <span>Solid</span>
                     </button>
-                  )
-                })}
-              </div>
-
-              {/* Line Weight Selection Pop-up Directly Below Color Selection (Screen-Clamped) */}
-              {showStrokePopup && (
-                <div
-                  className="absolute top-full mt-2 z-50 bg-gray-900 border border-gray-700 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex flex-col gap-2.5 animate-fade-in"
-                  style={popupStyle}
-                >
-                  <div className="flex items-center justify-between text-xs text-gray-300 pb-1.5 border-b border-gray-800">
-                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400">Line Weight</span>
-                    <span className="font-mono font-bold text-white bg-gray-800 px-2 py-0.5 rounded-md border border-gray-700 text-xs">
-                      {strokeW}px
-                    </span>
-                  </div>
-
-                  {/* Preset Thickness Options with Live Stroke Preview in the Active Color */}
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {[
-                      { label: 'Fine',  w: 2 },
-                      { label: 'Med',   w: 4 },
-                      { label: 'Thick', w: 7 },
-                      { label: 'Heavy', w: 12 },
-                    ].map(preset => {
-                      const isActive = strokeW === preset.w
-                      return (
-                        <button
-                          key={preset.w}
-                          type="button"
-                          onClick={() => handleSetStrokeWidth(preset.w)}
-                          className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
-                            isActive
-                              ? 'bg-gray-800 border-white/60 text-white shadow-xs'
-                              : 'bg-gray-950/60 border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800/80'
-                          }`}
-                          title={`${preset.label} (${preset.w}px)`}
-                        >
-                          <div
-                            className="w-full rounded-full mb-1.5 transition-all"
-                            style={{
-                              height: `${Math.min(10, Math.max(2, preset.w))}px`,
-                              background: color,
-                            }}
-                          />
-                          <span className="text-[10px] font-semibold">{preset.label}</span>
-                        </button>
-                      )
-                    })}
+                    <button
+                      type="button"
+                      onClick={() => handleSetLineType('dash')}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                        lineType === 'dash' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      <svg width="18" height="8" viewBox="0 0 18 8" className={lineType === 'dash' ? 'text-white' : 'text-gray-400'}>
+                        <line x1="1" y1="4" x2="5" y2="4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                        <line x1="7.5" y1="4" x2="11.5" y2="4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                        <line x1="14" y1="4" x2="17" y2="4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                      </svg>
+                      <span>Dash</span>
+                    </button>
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+          </div>
 
-            {/* Right: Undo / Redo / Clear Annotations (Eraser icon) */}
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={undo}
-                disabled={!canUndo}
-                className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                  canUndo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
-                }`}
-                title="Undo annotation"
-              >
-                <Undo2 size={17} />
-              </button>
-              <button
-                type="button"
-                onClick={redo}
-                disabled={!canRedo}
-                className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                  canRedo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
-                }`}
-                title="Redo annotation"
-              >
-                <Redo2 size={17} />
-              </button>
-              {/* Clear All Annotations changed to Eraser icon */}
-              <button
-                type="button"
-                onClick={clearAllAnnotations}
-                className="p-2 text-amber-400 hover:text-amber-300 hover:bg-gray-700 rounded-xl transition-colors ml-0.5 cursor-pointer"
-                title="Clear all annotations on photo (Eraser)"
-              >
-                <Eraser size={17} />
-              </button>
-            </div>
+          {/* Divider */}
+          <div className="h-6 w-px bg-gray-700 flex-shrink-0 mx-0.5" />
+
+          {/* Right: Undo / Redo / Clear Annotations (Eraser icon) */}
+          <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              className={`p-1.5 sm:p-2 rounded-xl transition-colors cursor-pointer ${
+                canUndo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
+              }`}
+              title="Undo annotation"
+            >
+              <Undo2 size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              className={`p-1.5 sm:p-2 rounded-xl transition-colors cursor-pointer ${
+                canRedo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
+              }`}
+              title="Redo annotation"
+            >
+              <Redo2 size={16} />
+            </button>
+            {/* Clear All Annotations changed to Eraser icon */}
+            <button
+              type="button"
+              onClick={clearAllAnnotations}
+              className="p-1.5 sm:p-2 text-amber-400 hover:text-amber-300 hover:bg-gray-700 rounded-xl transition-colors cursor-pointer"
+              title="Clear all annotations on photo (Eraser)"
+            >
+              <Eraser size={16} />
+            </button>
           </div>
         </div>
       </div>
@@ -1238,7 +1643,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
             className="sitepunch-btn-primary flex-1 sm:flex-initial sm:px-10 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg cursor-pointer"
             style={{ background: 'var(--brand-button, #1d4ed8)' }}
           >
-            <Check size={16} /> Save Photo
+            <Check size={16} /> {saveButtonLabel || 'Save Photo'}
           </button>
         </div>
       </div>
@@ -1247,7 +1652,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 }
 
 // ── Construction Revision Cloud Generator ──────────────────────────────────
-function drawCloud(Fabric, ox, oy, x, y, stroke, strokeWidth) {
+function drawCloud(Fabric, ox, oy, x, y, stroke, strokeWidth, strokeDashArray = null) {
   const left   = Math.min(ox, x)
   const top    = Math.min(oy, y)
   const width  = Math.abs(x - ox)
@@ -1300,6 +1705,7 @@ function drawCloud(Fabric, ox, oy, x, y, stroke, strokeWidth) {
   return new Fabric.Path(d, {
     stroke,
     strokeWidth,
+    strokeDashArray,
     fill: 'transparent',
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
