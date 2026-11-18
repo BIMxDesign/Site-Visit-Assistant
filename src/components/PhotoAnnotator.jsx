@@ -57,8 +57,16 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   const [showStrokePopup, setShowStrokePopup] = useState(false)
   const strokePopupRef = useRef(null)
 
-  // Zoom state
+  // Zoom & Pan state
   const [zoomLevel, setZoomLevel] = useState(1)
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
+  const panOffsetRef = useRef({ x: 0, y: 0 })
+  const viewportContainerRef = useRef(null)
+  const canvasWrapperRef = useRef(null)
+  const panStart = useRef({ x: 0, y: 0 })
+  const panStartOffset = useRef({ x: 0, y: 0 })
+  const pinchDistRef = useRef(null)
+  const pinchStartZoomRef = useRef(1)
 
   // Crop mode state
   const [isCropping, setIsCropping] = useState(false)
@@ -84,6 +92,13 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   useEffect(() => { toolRef.current    = tool    }, [tool])
   useEffect(() => { colorRef.current   = color   }, [color])
   useEffect(() => { strokeWRef.current = strokeW }, [strokeW])
+
+  useEffect(() => {
+    panOffsetRef.current = panOffset
+    if (fabricRef.current) {
+      fabricRef.current.calcOffset()
+    }
+  }, [zoomLevel, panOffset])
 
   // Accessibility & UX: Handle Escape key
   useEffect(() => {
@@ -156,13 +171,13 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       }
 
       const wrap = overlayRef.current
-      const maxW = (wrap ? wrap.clientWidth : window.innerWidth) - 32
-      const maxH = (wrap ? wrap.clientHeight : window.innerHeight) - 180
+      const maxW = (wrap ? wrap.clientWidth : window.innerWidth) - 16
+      const maxH = (wrap ? wrap.clientHeight : window.innerHeight) - 108
 
       const img = new window.Image()
       img.onload = () => {
         if (disposed) return
-        const scale = Math.min(maxW / img.width, maxH / img.height, 1)
+        const scale = Math.min(maxW / img.width, maxH / img.height)
         const cw = Math.round(img.width * scale)
         const ch = Math.round(img.height * scale)
         imageMetaRef.current = {
@@ -189,6 +204,8 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
         })
         fabricRef.current = fab
         setZoomLevel(1)
+        setPanOffset({ x: 0, y: 0 })
+        panOffsetRef.current = { x: 0, y: 0 }
 
         if (toolRef.current === 'pen' && fab.freeDrawingBrush) {
           fab.freeDrawingBrush.color = colorRef.current
@@ -211,19 +228,19 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
         // Mouse Wheel Zoom
         fab.on('mouse:wheel', (opt) => {
-          const delta = opt.e.deltaY
-          let zoom = fab.getZoom()
-          zoom *= 0.999 ** delta
-          if (zoom > 4) zoom = 4
-          if (zoom < 1) {
-            zoom = 1
-            fab.setViewportTransform([1, 0, 0, 1, 0, 0])
-          } else {
-            fab.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom)
-          }
-          setZoomLevel(zoom)
           opt.e.preventDefault()
           opt.e.stopPropagation()
+          const delta = opt.e.deltaY
+          const factor = delta < 0 ? 1.15 : 1 / 1.15
+          setZoomLevel(prev => {
+            const next = Math.min(5, Math.max(0.5, +(prev * factor).toFixed(2)))
+            if (Math.abs(next - 1) < 0.05) {
+              setPanOffset({ x: 0, y: 0 })
+              panOffsetRef.current = { x: 0, y: 0 }
+              return 1
+            }
+            return next
+          })
         })
 
         // Selection listeners
@@ -388,11 +405,14 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
     // Pan handling
     if (isPanning.current && toolRef.current === 'pan') {
-      const vpt = fab.viewportTransform
-      vpt[4] += e.e.clientX - lastPanPt.current.x
-      vpt[5] += e.e.clientY - lastPanPt.current.y
-      fab.requestRenderAll()
+      const dx = e.e.clientX - lastPanPt.current.x
+      const dy = e.e.clientY - lastPanPt.current.y
       lastPanPt.current = { x: e.e.clientX, y: e.e.clientY }
+      setPanOffset(prev => {
+        const next = { x: prev.x + dx, y: prev.y + dy }
+        panOffsetRef.current = next
+        return next
+      })
       return
     }
 
@@ -544,31 +564,95 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
   // ── Zoom In / Out / Reset ─────────────────────────────────────────────────
   const handleZoomIn = () => {
-    const fab = fabricRef.current
-    if (!fab) return
-    const newZoom = Math.min(4, fab.getZoom() * 1.25)
-    fab.zoomToPoint({ x: fab.width / 2, y: fab.height / 2 }, newZoom)
-    setZoomLevel(newZoom)
+    setZoomLevel(prev => Math.min(5, +(prev * 1.25).toFixed(2)))
   }
 
   const handleZoomOut = () => {
-    const fab = fabricRef.current
-    if (!fab) return
-    let newZoom = Math.max(1, fab.getZoom() / 1.25)
-    if (newZoom <= 1.05) {
-      newZoom = 1
-      fab.setViewportTransform([1, 0, 0, 1, 0, 0])
-    } else {
-      fab.zoomToPoint({ x: fab.width / 2, y: fab.height / 2 }, newZoom)
-    }
-    setZoomLevel(newZoom)
+    setZoomLevel(prev => {
+      const next = Math.max(0.5, +(prev / 1.25).toFixed(2))
+      if (Math.abs(next - 1) < 0.08) {
+        setPanOffset({ x: 0, y: 0 })
+        panOffsetRef.current = { x: 0, y: 0 }
+        return 1
+      }
+      return next
+    })
   }
 
   const handleResetZoom = () => {
-    const fab = fabricRef.current
-    if (!fab) return
-    fab.setViewportTransform([1, 0, 0, 1, 0, 0])
     setZoomLevel(1)
+    setPanOffset({ x: 0, y: 0 })
+    panOffsetRef.current = { x: 0, y: 0 }
+  }
+
+  // Viewport Wheel & Pointer Handlers (Pan & Zoom anywhere on screen)
+  const handleViewportWheel = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+    setZoomLevel(prev => {
+      const next = Math.min(5, Math.max(0.5, +(prev * factor).toFixed(2)))
+      if (Math.abs(next - 1) < 0.05) {
+        setPanOffset({ x: 0, y: 0 })
+        panOffsetRef.current = { x: 0, y: 0 }
+        return 1
+      }
+      return next
+    })
+  }
+
+  const handleViewportPointerDown = (e) => {
+    if (toolRef.current !== 'pan' && e.button !== 1 && e.button !== 0) return
+    const onCanvas = e.target && e.target.closest && (e.target.closest('.canvas-container') || e.target.closest('canvas'))
+    if (toolRef.current === 'pan' || e.button === 1 || (!onCanvas && zoomLevel > 1)) {
+      isPanning.current = true
+      panStart.current = { x: e.clientX, y: e.clientY }
+      panStartOffset.current = { ...panOffsetRef.current }
+      try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
+    }
+  }
+
+  const handleViewportPointerMove = (e) => {
+    if (isPanning.current) {
+      const dx = e.clientX - panStart.current.x
+      const dy = e.clientY - panStart.current.y
+      const next = { x: panStartOffset.current.x + dx, y: panStartOffset.current.y + dy }
+      panOffsetRef.current = next
+      setPanOffset(next)
+    }
+  }
+
+  const handleViewportPointerUp = () => {
+    if (isPanning.current) {
+      isPanning.current = false
+    }
+  }
+
+  const handleTouchStart = (e) => {
+    if (e.touches && e.touches.length === 2) {
+      const [t1, t2] = e.touches
+      pinchDistRef.current = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+      pinchStartZoomRef.current = zoomLevel
+      isPanning.current = false
+    }
+  }
+
+  const handleTouchMove = (e) => {
+    if (e.touches && e.touches.length === 2 && pinchDistRef.current) {
+      const [t1, t2] = e.touches
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+      const ratio = dist / pinchDistRef.current
+      const newZoom = Math.min(4, Math.max(1, +(pinchStartZoomRef.current * ratio).toFixed(2)))
+      setZoomLevel(newZoom)
+      if (newZoom <= 1.05) {
+        setPanOffset({ x: 0, y: 0 })
+        panOffsetRef.current = { x: 0, y: 0 }
+      }
+    }
+  }
+
+  const handleTouchEnd = () => {
+    pinchDistRef.current = null
   }
 
   // ── Crop Handling ─────────────────────────────────────────────────────────
@@ -913,33 +997,54 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       </div>
 
       {/* Canvas & Interactive Viewport Container */}
-      <div className="flex-1 relative flex items-center justify-center overflow-hidden p-3 bg-gray-950">
+      <div
+        ref={viewportContainerRef}
+        className="flex-1 relative overflow-hidden bg-gray-950 flex items-center justify-center touch-none select-none"
+        onWheel={handleViewportWheel}
+        onPointerDown={handleViewportPointerDown}
+        onPointerMove={handleViewportPointerMove}
+        onPointerUp={handleViewportPointerUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        style={{
+          cursor: tool === 'pan' ? (isPanning.current ? 'grabbing' : 'grab') : 'default',
+        }}
+      >
+        {/* Floating Selected Annotation Toolbar (Move / Edit / Delete) */}
+        {selectedObj && tool === 'select' && (
+          <div
+            className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-gray-900/90 border border-gray-700 px-3 py-1.5 rounded-2xl shadow-2xl backdrop-blur-md animate-fade-in"
+            data-no-pan="true"
+          >
+            <span className="text-xs text-gray-300 font-semibold flex items-center gap-1.5">
+              <MousePointer size={13} className="text-blue-400" />
+              <span>{selectedObj.type === 'i-text' ? 'Text Selected (Double-click to edit)' : 'Annotation Selected'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleDeleteSelected}
+              className="px-2.5 py-1 text-xs font-bold text-white bg-red-600 hover:bg-red-500 rounded-xl transition-colors flex items-center gap-1 shadow-md cursor-pointer ml-1"
+              title="Delete selected annotation (or press Delete/Backspace)"
+            >
+              <Trash2 size={13} /> Delete
+            </button>
+          </div>
+        )}
+
+        {/* Scalable and Pannable Canvas Wrapper */}
         <div
-          className="relative rounded-lg shadow-2xl overflow-hidden border border-gray-800 touch-none flex items-center justify-center"
+          ref={canvasWrapperRef}
+          className="relative touch-none shadow-2xl"
           style={{
             width: imageMetaRef.current.canvasWidth || 'auto',
             height: imageMetaRef.current.canvasHeight || 'auto',
+            transformOrigin: 'center center',
+            transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel})`,
+            transition: isPanning.current ? 'none' : 'transform 0.12s ease-out',
           }}
         >
           <canvas ref={canvasRef} className="block touch-none" />
-
-          {/* Floating Selected Annotation Toolbar (Move / Edit / Delete) */}
-          {selectedObj && tool === 'select' && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-gray-900/90 border border-gray-700 px-3 py-1.5 rounded-2xl shadow-2xl backdrop-blur-md animate-fade-in">
-              <span className="text-xs text-gray-300 font-semibold flex items-center gap-1.5">
-                <MousePointer size={13} className="text-blue-400" />
-                <span>{selectedObj.type === 'i-text' ? 'Text Selected (Double-click to edit)' : 'Annotation Selected'}</span>
-              </span>
-              <button
-                type="button"
-                onClick={handleDeleteSelected}
-                className="px-2.5 py-1 text-xs font-bold text-white bg-red-600 hover:bg-red-500 rounded-xl transition-colors flex items-center gap-1 shadow-md cursor-pointer ml-1"
-                title="Delete selected annotation (or press Delete/Backspace)"
-              >
-                <Trash2 size={13} /> Delete
-              </button>
-            </div>
-          )}
 
           {/* Interactive Crop Overlay */}
           {isCropping && (
@@ -1016,11 +1121,14 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
         {/* Floating Zoom Controls at Bottom-Right of Viewport */}
         {!isCropping && (
-          <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-gray-900/85 backdrop-blur-md px-2 py-1 rounded-xl border border-gray-700 text-white shadow-xl z-20">
+          <div
+            className="absolute bottom-4 right-4 flex items-center gap-1 bg-gray-900/85 backdrop-blur-md px-2 py-1 rounded-xl border border-gray-700 text-white shadow-xl z-20"
+            data-no-pan="true"
+          >
             <button
               type="button"
               onClick={handleZoomOut}
-              disabled={zoomLevel <= 1}
+              disabled={zoomLevel <= 0.5}
               className="p-1 hover:bg-white/15 rounded-lg text-gray-300 hover:text-white transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
               title="Zoom Out"
             >
@@ -1030,20 +1138,20 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
               type="button"
               onClick={handleResetZoom}
               className="px-2 py-0.5 text-xs font-mono font-bold text-gray-200 hover:text-white hover:bg-white/15 rounded-lg transition-colors cursor-pointer"
-              title="Reset Zoom (100%)"
+              title="Reset Zoom (Fit to Screen)"
             >
               {Math.round(zoomLevel * 100)}%
             </button>
             <button
               type="button"
               onClick={handleZoomIn}
-              disabled={zoomLevel >= 4}
+              disabled={zoomLevel >= 5}
               className="p-1 hover:bg-white/15 rounded-lg text-gray-300 hover:text-white transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
               title="Zoom In"
             >
               <ZoomIn size={16} />
             </button>
-            {zoomLevel > 1 && (
+            {(zoomLevel !== 1 || panOffset.x !== 0 || panOffset.y !== 0) && (
               <button
                 type="button"
                 onClick={handleResetZoom}
