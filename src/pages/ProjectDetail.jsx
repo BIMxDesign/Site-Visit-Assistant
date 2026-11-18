@@ -860,6 +860,7 @@ export default function ProjectDetail() {
       <header
         className="sitepunch-header text-white shadow-lg flex-shrink-0 relative z-40"
         style={{
+          background: 'var(--brand-header, #7e0b1d)',
           paddingTop: 'calc(12px + env(safe-area-inset-top, 0px))',
           paddingBottom: '12px',
           paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
@@ -2325,7 +2326,7 @@ function FloorPlanCard({
       onDrop={(e) => onDrop(e, fp.uuid)}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`liquid-glass-card rounded-2xl p-3.5 cursor-pointer flex gap-3 items-center group transition-all select-none border border-l-4 ${
+      className={`liquid-glass-card rounded-2xl p-3.5 cursor-pointer flex gap-3 items-center group transition-all select-none border ${
         isDragging
           ? 'opacity-40 border-dashed border-brand-400 scale-[0.98]'
           : isDragOver
@@ -2333,7 +2334,6 @@ function FloorPlanCard({
             : 'hover:shadow-md'
       }`}
       style={{
-        borderLeftColor: pinColor || 'var(--punch-pin-color, #a40e26)',
         borderColor: `rgba(${r}, ${g}, ${b}, 0.35)`,
         background: `linear-gradient(135deg, rgba(${r}, ${g}, ${b}, 0.05) 0%, #ffffff 50%, rgba(${r}, ${g}, ${b}, 0.09) 100%)`,
         boxShadow: `0 4px 18px -2px rgba(${r}, ${g}, ${b}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,
@@ -2486,7 +2486,7 @@ function PunchItemRow({
       onDrop={(e) => onDrop && onDrop(e, item.uuid)}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`liquid-glass-card rounded-2xl p-2.5 sm:p-3.5 flex gap-2.5 sm:gap-3 items-start sm:items-center cursor-pointer group transition-all select-none border border-l-4 ${
+      className={`liquid-glass-card rounded-2xl p-2.5 sm:p-3.5 flex gap-2.5 sm:gap-3 items-start sm:items-center cursor-pointer group transition-all select-none border ${
         isDragging
           ? 'opacity-40 border-dashed border-brand-400 scale-[0.98]'
           : isDragOver
@@ -2494,7 +2494,6 @@ function PunchItemRow({
             : 'active:scale-[0.99] hover:shadow-md'
       }`}
       style={{
-        borderLeftColor: pinColor || 'var(--punch-pin-color, #a40e26)',
         borderColor: `rgba(${r}, ${g}, ${b}, 0.35)`,
         background: `linear-gradient(135deg, rgba(${r}, ${g}, ${b}, 0.05) 0%, #ffffff 50%, rgba(${r}, ${g}, ${b}, 0.09) 100%)`,
         boxShadow: `0 4px 18px -2px rgba(${r}, ${g}, ${b}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,
@@ -2545,15 +2544,36 @@ function PunchItemRow({
           {fullTitle}
         </h4>
 
-        {/* Badges Row below Title */}
+        {/* Badges Row 1 below Title: Status, Priority, Extra Pins */}
         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-          <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="sm" />
+          <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="xs" />
           {item.priority && (
-            <span className={`text-xs px-2 py-0.5 rounded-full font-bold shadow-2xs ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
+            <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
               {item.priority}
             </span>
           )}
-          {item.trade && <span className="text-xs text-gray-500 font-semibold">{item.trade}</span>}
+          {item.extraPins?.length > 0 && (
+            <span className="text-[10px] font-semibold text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full flex-shrink-0">
+              {item.extraPins.length + 1} pins
+            </span>
+          )}
+        </div>
+
+        {/* Badges Row 2 below Title: Category, Due Date, Assignee, Floor Plan */}
+        <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 flex-wrap">
+          <span className="font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md flex items-center gap-1.5 flex-wrap text-[11px]">
+            <span>Category: {item.trade || 'General'}</span>
+            <span className="text-gray-400">•</span>
+            <span className="flex items-center gap-1 text-gray-500">
+              <Calendar size={11} className="text-gray-400" />
+              <span>{item.dueDate ? `Due: ${formatDatePattern(item.dueDate)}` : 'No Due Date'}</span>
+            </span>
+          </span>
+          {item.assignedTo && (
+            <span className="flex items-center gap-1 text-gray-500 font-medium text-[11px]">
+              <User size={11} /> {item.assignedTo}
+            </span>
+          )}
           {floorPlan && (
             <span className="text-xs text-gray-400 flex items-center gap-1 font-medium">
               • {showPhase && phase ? `${phase.name} › ` : ''}{floorPlan.name}

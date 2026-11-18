@@ -56,6 +56,12 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   // Line weight pop-up state
   const [showStrokePopup, setShowStrokePopup] = useState(false)
   const strokePopupRef = useRef(null)
+  const [popupStyle, setPopupStyle] = useState({
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: '210px',
+    maxWidth: 'calc(100vw - 20px)',
+  })
 
   // Zoom & Pan state
   const [zoomLevel, setZoomLevel] = useState(1)
@@ -149,6 +155,44 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       document.removeEventListener('touchstart', handleClickOutside)
     }
   }, [])
+
+  // Calculate & dynamically clamp line weight popup so it never overflows screen on phone view
+  useEffect(() => {
+    if (!showStrokePopup) return
+    const updatePopupPosition = () => {
+      if (!strokePopupRef.current) return
+      const rect = strokePopupRef.current.getBoundingClientRect()
+      const popupWidth = 210
+      const margin = 12
+      const screenWidth = window.innerWidth
+
+      const triggerCenter = rect.left + rect.width / 2
+      let leftInViewport = triggerCenter - popupWidth / 2
+
+      if (leftInViewport < margin) {
+        leftInViewport = margin
+      } else if (leftInViewport + popupWidth > screenWidth - margin) {
+        leftInViewport = Math.max(margin, screenWidth - margin - popupWidth)
+      }
+
+      const localLeft = leftInViewport - rect.left
+
+      setPopupStyle({
+        left: `${localLeft}px`,
+        transform: 'none',
+        width: `${Math.min(popupWidth, screenWidth - margin * 2)}px`,
+        maxWidth: `calc(100vw - ${margin * 2}px)`,
+      })
+    }
+
+    updatePopupPosition()
+    window.addEventListener('resize', updatePopupPosition)
+    window.addEventListener('scroll', updatePopupPosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePopupPosition)
+      window.removeEventListener('scroll', updatePopupPosition, true)
+    }
+  }, [showStrokePopup])
 
   // ── Initialize Fabric Canvas ──────────────────────────────────────────────
   useEffect(() => {
@@ -856,9 +900,9 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
           paddingRight: 'calc(12px + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex flex-wrap items-center justify-between gap-2 max-w-4xl mx-auto w-full">
-          {/* Left: Tool buttons (Select, Cloud, Arrow, Pen, Text, Pan, Crop) */}
-          <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap">
+        <div className="flex flex-wrap items-center justify-center sm:justify-between gap-2 max-w-4xl mx-auto w-full">
+          {/* Tool buttons: Centered on phone view, left-aligned on desktop */}
+          <div className="flex items-center justify-center gap-1 sm:gap-1.5 flex-wrap w-full sm:w-auto">
             {TOOLS.map(t => {
               const isActive = (tool === t.id && !isCropping) || (t.id === 'crop' && isCropping)
               return (
@@ -867,7 +911,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
                   type="button"
                   onClick={() => handleSelectTool(t.id)}
                   title={t.label}
-                  className={`flex flex-col items-center justify-center px-2 py-1 rounded-xl transition-all min-w-[42px] cursor-pointer ${
+                  className={`flex flex-col items-center justify-center px-2 py-1 rounded-xl transition-all min-w-[40px] sm:min-w-[42px] cursor-pointer ${
                     isActive
                       ? 'bg-brand-600 text-white shadow-sm ring-1 ring-white/30'
                       : 'text-gray-300 hover:text-white hover:bg-gray-700/80'
@@ -880,118 +924,124 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
             })}
           </div>
 
-          {/* Center: 3 Color Selection with Line Weight Popup Below */}
-          <div className="relative" ref={strokePopupRef}>
-            <div className="flex items-center gap-2 bg-gray-900/60 p-1.5 px-2.5 rounded-xl border border-gray-700/80">
-              <span className="text-[10px] uppercase font-bold text-gray-400 mr-0.5 hidden xs:inline">Color</span>
-              {THREE_COLORS.map(c => {
-                const isSelected = color === c
-                return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => {
-                      handleSelectColor(c)
-                      setShowStrokePopup(prev => isSelected ? !prev : true)
-                    }}
-                    className={`w-7 h-7 sm:w-6 sm:h-6 rounded-full flex-shrink-0 transition-all cursor-pointer relative shadow-sm ${
-                      isSelected
-                        ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900 scale-110'
-                        : 'opacity-80 hover:opacity-100 hover:scale-105'
-                    }`}
-                    style={{ background: c }}
-                    title={`Select color (Click to change line weight)`}
-                  >
-                    {isSelected && (
-                      <span className="absolute inset-0 flex items-center justify-center text-white drop-shadow-xs">
-                        <Check size={13} strokeWidth={3} />
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
+          {/* Secondary Controls (Color Selection + Undo/Redo/Eraser): Centered on phone view */}
+          <div className="flex items-center justify-center gap-2.5 sm:gap-4 flex-wrap">
+            {/* 3 Color Selection with Line Weight Popup Below */}
+            <div className="relative" ref={strokePopupRef}>
+              <div className="flex items-center gap-2 bg-gray-900/60 p-1.5 px-2.5 rounded-xl border border-gray-700/80">
+                <span className="text-[10px] uppercase font-bold text-gray-400 mr-0.5 hidden xs:inline">Color</span>
+                {THREE_COLORS.map(c => {
+                  const isSelected = color === c
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        handleSelectColor(c)
+                        setShowStrokePopup(prev => isSelected ? !prev : true)
+                      }}
+                      className={`w-7 h-7 sm:w-6 sm:h-6 rounded-full flex-shrink-0 transition-all cursor-pointer relative shadow-sm ${
+                        isSelected
+                          ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900 scale-110'
+                          : 'opacity-80 hover:opacity-100 hover:scale-105'
+                      }`}
+                      style={{ background: c }}
+                      title={`Select color (Click to change line weight)`}
+                    >
+                      {isSelected && (
+                        <span className="absolute inset-0 flex items-center justify-center text-white drop-shadow-xs">
+                          <Check size={13} strokeWidth={3} />
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Line Weight Selection Pop-up Directly Below Color Selection (Screen-Clamped) */}
+              {showStrokePopup && (
+                <div
+                  className="absolute top-full mt-2 z-50 bg-gray-900 border border-gray-700 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex flex-col gap-2.5 animate-fade-in"
+                  style={popupStyle}
+                >
+                  <div className="flex items-center justify-between text-xs text-gray-300 pb-1.5 border-b border-gray-800">
+                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400">Line Weight</span>
+                    <span className="font-mono font-bold text-white bg-gray-800 px-2 py-0.5 rounded-md border border-gray-700 text-xs">
+                      {strokeW}px
+                    </span>
+                  </div>
+
+                  {/* Preset Thickness Options with Live Stroke Preview in the Active Color */}
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[
+                      { label: 'Fine',  w: 2 },
+                      { label: 'Med',   w: 4 },
+                      { label: 'Thick', w: 7 },
+                      { label: 'Heavy', w: 12 },
+                    ].map(preset => {
+                      const isActive = strokeW === preset.w
+                      return (
+                        <button
+                          key={preset.w}
+                          type="button"
+                          onClick={() => handleSetStrokeWidth(preset.w)}
+                          className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
+                            isActive
+                              ? 'bg-gray-800 border-white/60 text-white shadow-xs'
+                              : 'bg-gray-950/60 border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800/80'
+                          }`}
+                          title={`${preset.label} (${preset.w}px)`}
+                        >
+                          <div
+                            className="w-full rounded-full mb-1.5 transition-all"
+                            style={{
+                              height: `${Math.min(10, Math.max(2, preset.w))}px`,
+                              background: color,
+                            }}
+                          />
+                          <span className="text-[10px] font-semibold">{preset.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Line Weight Selection Pop-up Directly Below Color Selection */}
-            {showStrokePopup && (
-              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 bg-gray-900 border border-gray-700 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex flex-col gap-2.5 min-w-[210px] animate-fade-in">
-                <div className="flex items-center justify-between text-xs text-gray-300 pb-1.5 border-b border-gray-800">
-                  <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400">Line Weight</span>
-                  <span className="font-mono font-bold text-white bg-gray-800 px-2 py-0.5 rounded-md border border-gray-700 text-xs">
-                    {strokeW}px
-                  </span>
-                </div>
-
-                {/* Preset Thickness Options with Live Stroke Preview in the Active Color */}
-                <div className="grid grid-cols-4 gap-1.5">
-                  {[
-                    { label: 'Fine',  w: 2 },
-                    { label: 'Med',   w: 4 },
-                    { label: 'Thick', w: 7 },
-                    { label: 'Heavy', w: 12 },
-                  ].map(preset => {
-                    const isActive = strokeW === preset.w
-                    return (
-                      <button
-                        key={preset.w}
-                        type="button"
-                        onClick={() => handleSetStrokeWidth(preset.w)}
-                        className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
-                          isActive
-                            ? 'bg-gray-800 border-white/60 text-white shadow-xs'
-                            : 'bg-gray-950/60 border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800/80'
-                        }`}
-                        title={`${preset.label} (${preset.w}px)`}
-                      >
-                        <div
-                          className="w-full rounded-full mb-1.5 transition-all"
-                          style={{
-                            height: `${Math.min(10, Math.max(2, preset.w))}px`,
-                            background: color,
-                          }}
-                        />
-                        <span className="text-[10px] font-semibold">{preset.label}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Right: Undo / Redo / Clear Annotations (Eraser icon) */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={undo}
-              disabled={!canUndo}
-              className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                canUndo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
-              }`}
-              title="Undo annotation"
-            >
-              <Undo2 size={17} />
-            </button>
-            <button
-              type="button"
-              onClick={redo}
-              disabled={!canRedo}
-              className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                canRedo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
-              }`}
-              title="Redo annotation"
-            >
-              <Redo2 size={17} />
-            </button>
-            {/* Clear All Annotations changed to Eraser icon */}
-            <button
-              type="button"
-              onClick={clearAllAnnotations}
-              className="p-2 text-amber-400 hover:text-amber-300 hover:bg-gray-700 rounded-xl transition-colors ml-0.5 cursor-pointer"
-              title="Clear all annotations on photo (Eraser)"
-            >
-              <Eraser size={17} />
-            </button>
+            {/* Right: Undo / Redo / Clear Annotations (Eraser icon) */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={undo}
+                disabled={!canUndo}
+                className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                  canUndo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
+                }`}
+                title="Undo annotation"
+              >
+                <Undo2 size={17} />
+              </button>
+              <button
+                type="button"
+                onClick={redo}
+                disabled={!canRedo}
+                className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                  canRedo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
+                }`}
+                title="Redo annotation"
+              >
+                <Redo2 size={17} />
+              </button>
+              {/* Clear All Annotations changed to Eraser icon */}
+              <button
+                type="button"
+                onClick={clearAllAnnotations}
+                className="p-2 text-amber-400 hover:text-amber-300 hover:bg-gray-700 rounded-xl transition-colors ml-0.5 cursor-pointer"
+                title="Clear all annotations on photo (Eraser)"
+              >
+                <Eraser size={17} />
+              </button>
+            </div>
           </div>
         </div>
       </div>

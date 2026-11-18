@@ -87,6 +87,7 @@ export function applyThemeColor(hexColor) {
     root.style.setProperty('--brand-button-hover', brand800)
     root.style.setProperty('--brand-header-rgb', `${rgbHeader.r}, ${rgbHeader.g}, ${rgbHeader.b}`)
     root.style.setProperty('--brand-button-rgb', `${rgbButton.r}, ${rgbButton.g}, ${rgbButton.b}`)
+    root.style.backgroundColor = brand800
 
     root.style.setProperty('--brand-50',  brand50)
     root.style.setProperty('--brand-100', brand100)
@@ -134,13 +135,18 @@ export function applyThemeColor(hexColor) {
         --brand-800: ${brand800} !important;
         --brand-900: ${brand900} !important;
       }
-      /* Top main page, menu bars, header bars - Apple Liquid Glass header */
+      html {
+        background-color: ${brand800} !important;
+      }
+      /* Top main page, menu bars, header bars - Solid brand header (no white fade or bleed) */
       header, .sitepunch-header, .bg-brand-800, header.bg-brand-800 {
-        background: linear-gradient(135deg, rgba(${rgbHeader.r}, ${rgbHeader.g}, ${rgbHeader.b}, 0.88), rgba(${rgbButton.r}, ${rgbButton.g}, ${rgbButton.b}, 0.94)) !important;
-        backdrop-filter: blur(30px) saturate(200%) !important;
-        -webkit-backdrop-filter: blur(30px) saturate(200%) !important;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.22) !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), inset 0 1px 1px rgba(255, 255, 255, 0.35) !important;
+        background: ${brand800} !important;
+        background-color: ${brand800} !important;
+        background-image: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18) !important;
       }
       /* Action buttons & FABs - Apple Liquid Glass primary buttons */
       .sitepunch-btn-primary, .sitepunch-fab, .bg-brand-700, button.bg-brand-700 {

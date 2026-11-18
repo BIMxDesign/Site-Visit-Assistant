@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="background-color: #7e0b1d;">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -43,6 +43,7 @@
               var brand800 = mixBlack(0.25);
               var brand700 = mixBlack(0.12);
               var root = document.documentElement;
+              root.style.backgroundColor = brand800;
               root.style.setProperty('--brand-color', savedTheme);
               root.style.setProperty('--brand-header', brand800);
               root.style.setProperty('--brand-button', brand700);
@@ -60,7 +61,8 @@
               var styleEl = document.createElement('style');
               styleEl.id = 'sitepunch-theme-override';
               styleEl.textContent = ':root{--brand-color:' + savedTheme + '!important;--brand-header:' + brand800 + '!important;--brand-button:' + brand700 + '!important;--brand-button-hover:' + brand800 + '!important;--punch-pin-color:' + savedPin + '!important;}' +
-                'header,.sitepunch-header,.bg-brand-800,header.bg-brand-800{background-color:' + brand800 + '!important;}' +
+                'html{background-color:' + brand800 + '!important;}' +
+                'header,.sitepunch-header,.bg-brand-800,header.bg-brand-800{background-color:' + brand800 + '!important;background-image:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:0 4px 16px rgba(0,0,0,0.18)!important;}' +
                 '.sitepunch-btn-primary,.sitepunch-fab,.bg-brand-700,button.bg-brand-700{background-color:' + brand700 + '!important;}' +
                 '.sitepunch-btn-primary:hover,.sitepunch-fab:hover,.hover\\:bg-brand-800:hover,button.hover\\:bg-brand-800:hover{background-color:' + brand800 + '!important;}';
               document.head.appendChild(styleEl);

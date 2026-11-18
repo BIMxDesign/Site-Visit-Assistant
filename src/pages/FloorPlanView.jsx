@@ -979,6 +979,7 @@ export default function FloorPlanView() {
 
       {/* ── Header ── */}
       <header className="sitepunch-header text-white flex-shrink-0 shadow-lg z-30" style={{
+        background: 'var(--brand-header, #7e0b1d)',
         paddingTop: 'calc(10px + env(safe-area-inset-top, 0px))',
         paddingBottom: '10px',
         paddingLeft: 'calc(14px + env(safe-area-inset-left, 0px))',
@@ -1414,16 +1415,7 @@ export default function FloorPlanView() {
             data-no-canvas-click="true"
             onMouseDown={e => e.stopPropagation()}
             onTouchStart={e => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              top: 'calc(0.75rem + env(safe-area-inset-top, 0px))',
-              left: 'calc(0.75rem + env(safe-area-inset-left, 0px))',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              zIndex: 20,
-              flexWrap: 'wrap'
-            }}
+            className="absolute top-1.5 sm:top-2.5 left-2 sm:left-3 flex items-center gap-1.5 z-20 flex-wrap"
           >
             <div style={{ background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999 }}>
               {allPinsToRender.length} pin{allPinsToRender.length !== 1 ? 's' : ''}
@@ -1636,7 +1628,7 @@ export default function FloorPlanView() {
                       setCurrentPunchItem(item.uuid)
                       openPunchForm()
                     }}
-                    className={`liquid-glass-card rounded-2xl p-3.5 flex flex-col gap-2 cursor-pointer group transition-all select-none border border-l-4 ${
+                    className={`liquid-glass-card rounded-2xl p-3.5 flex flex-col gap-2 cursor-pointer group transition-all select-none border ${
                       draggedObsUuid === item.uuid
                         ? 'opacity-40 border-dashed border-brand-400 scale-[0.98]'
                         : dragOverObsUuid === item.uuid
@@ -1644,7 +1636,6 @@ export default function FloorPlanView() {
                           : 'active:scale-[0.99] hover:shadow-md'
                     }`}
                     style={{
-                      borderLeftColor: pinColor || 'var(--punch-pin-color, #a40e26)',
                       borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.35)`,
                       background: `linear-gradient(135deg, rgba(${pinR}, ${pinG}, ${pinB}, 0.05) 0%, #ffffff 50%, rgba(${pinR}, ${pinG}, ${pinB}, 0.09) 100%)`,
                       boxShadow: `0 4px 18px -2px rgba(${pinR}, ${pinG}, ${pinB}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,

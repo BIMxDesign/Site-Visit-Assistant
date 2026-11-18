@@ -122,15 +122,12 @@ export default function PunchItemForm() {
   useEffect(() => {
     return () => {
       isListeningRef.current = false
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current)
-      }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.onresult = null
           recognitionRef.current.onend = null
           recognitionRef.current.onerror = null
-          recognitionRef.current.abort()
+          recognitionRef.current.stop()
         } catch {}
       }
     }
@@ -702,8 +699,12 @@ export default function PunchItemForm() {
     if (editorRef.current) {
       editorRef.current.focus()
       const cur = editorRef.current.innerHTML.trim()
-      const sep = cur && !cur.endsWith(' ') && !cur.endsWith('<br>') ? ' ' : ''
-      document.execCommand('insertText', false, `${sep}${clean}`)
+      const sep = cur && !cur.endsWith(' ') && !cur.endsWith('<br>') && !cur.endsWith('&nbsp;') ? ' ' : ''
+      try {
+        document.execCommand('insertText', false, `${sep}${clean}`)
+      } catch {
+        editorRef.current.innerHTML = `${editorRef.current.innerHTML}${sep}${clean}`
+      }
       handleEditorInput()
     } else {
       setForm(prev => {
@@ -716,12 +717,9 @@ export default function PunchItemForm() {
 
   function stopVoiceSession() {
     isListeningRef.current = false
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current)
-      restartTimeoutRef.current = null
-    }
+    setListening(false)
 
-    // Commit any pending interim speech (guarantees no dropped words on iOS/Safari)
+    // Commit any pending interim speech so words aren't lost
     const pending = (latestInterimRef.current || '').trim()
     latestInterimRef.current = ''
     setInterimText('')
@@ -729,24 +727,23 @@ export default function PunchItemForm() {
       appendSpeechToNotes(pending)
     }
 
-    setListening(false)
-
     if (recognitionRef.current) {
       const rec = recognitionRef.current
       recognitionRef.current = null
       try {
-        rec.onstart = null
         rec.onresult = null
         rec.onerror = null
         rec.onend = null
-        rec.abort()
-      } catch (e) {
-        console.warn('Error aborting speech recognition:', e)
+        rec.stop()
+      } catch {
+        try {
+          rec.abort()
+        } catch {}
       }
     }
   }
 
-  function startRecognitionSession() {
+  async function startRecognitionSession() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
 
     if (!SR) {
@@ -756,33 +753,45 @@ export default function PunchItemForm() {
       return
     }
 
-    // Clean up any lingering previous instance before starting fresh
+    // Proactively verify / request microphone permission
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        // Immediately stop the probe track so SpeechRecognition has exclusive mic access
+        stream.getTracks().forEach(t => t.stop())
+      } catch (err) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setError('Microphone permission blocked. Please allow microphone access in your browser or device settings.')
+          setListening(false)
+          isListeningRef.current = false
+          return
+        }
+      }
+    }
+
+    // Clean up any lingering previous session before starting fresh
     if (recognitionRef.current) {
       try {
-        const oldRec = recognitionRef.current
-        recognitionRef.current = null
-        oldRec.onstart = null
-        oldRec.onresult = null
-        oldRec.onerror = null
-        oldRec.onend = null
-        oldRec.abort()
+        recognitionRef.current.onresult = null
+        recognitionRef.current.onerror = null
+        recognitionRef.current.onend = null
+        recognitionRef.current.stop()
       } catch {}
+      recognitionRef.current = null
     }
 
     try {
       const rec = new SR()
-
-      try {
-        rec.continuous = true
-      } catch {
-        rec.continuous = false
-      }
-
+      rec.continuous = true
       rec.interimResults = true
       rec.lang = 'en-US'
+      rec.maxAlternatives = 1
 
-      // Reset index tracking for this fresh session cycle
+      // Reset index tracking for this session
       processedFinalIndicesRef.current = new Set()
+      latestInterimRef.current = ''
+      setInterimText('')
+      setError('')
 
       rec.onstart = () => {
         isListeningRef.current = true
@@ -800,7 +809,6 @@ export default function PunchItemForm() {
           if (!transcript) continue
 
           if (res.isFinal) {
-            // Process each final index exactly once to eliminate double transcription
             if (!processedFinalIndicesRef.current.has(i)) {
               processedFinalIndicesRef.current.add(i)
               newFinals.push(transcript)
@@ -827,35 +835,33 @@ export default function PunchItemForm() {
       rec.onerror = (e) => {
         console.warn('Speech recognition event error:', e.error)
         if (e.error === 'no-speech') {
-          // Normal brief pause while user is thinking; onend will seamlessly restart
+          // Normal brief pause while user is thinking; do not kill session or show error
           return
         }
-
+        if (e.error === 'aborted') {
+          // Normal user abort/stop; do not show error
+          return
+        }
         if (e.error === 'not-allowed' || e.error === 'permission-denied') {
           setError('Microphone access blocked. Please click the lock or settings icon in your browser to allow microphone access.')
           stopVoiceSession()
           return
         }
-
         if (e.error === 'audio-capture') {
           setError('No microphone found or another app is currently using the microphone.')
           stopVoiceSession()
           return
         }
-
         if (e.error === 'network') {
           setError('Voice recognition requires an active internet connection on this browser.')
           stopVoiceSession()
           return
         }
-
-        if (e.error !== 'aborted') {
-          setError(`Voice input notice: ${e.error}`)
-        }
+        setError(`Voice input notice: ${e.error}`)
       }
 
       rec.onend = () => {
-        // Commit any remaining unfinalized interim speech (WebKit silence flush)
+        // Commit any remaining unfinalized interim speech
         const pending = (latestInterimRef.current || '').trim()
         latestInterimRef.current = ''
         setInterimText('')
@@ -863,19 +869,10 @@ export default function PunchItemForm() {
           appendSpeechToNotes(pending)
         }
 
-        // If user hasn't explicitly stopped, seamlessly spawn a fresh instance
-        if (isListeningRef.current) {
-          if (restartTimeoutRef.current) {
-            clearTimeout(restartTimeoutRef.current)
-          }
-          restartTimeoutRef.current = setTimeout(() => {
-            if (isListeningRef.current) {
-              startRecognitionSession()
-            }
-          }, 120)
-        } else {
-          setListening(false)
-        }
+        // Clean teardown so subsequent taps start freshly and reliably
+        isListeningRef.current = false
+        setListening(false)
+        recognitionRef.current = null
       }
 
       recognitionRef.current = rec

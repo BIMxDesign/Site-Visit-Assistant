@@ -39,6 +39,9 @@
     -webkit-user-select: none;
     user-select: none;
   }
+  html {
+    background-color: var(--brand-header, #7e0b1d);
+  }
   input, textarea, select {
     -webkit-user-select: auto;
     user-select: auto;
@@ -128,14 +131,15 @@ input[type="time"]::-webkit-date-and-time-value {
     inset 0 1px 2px 0 rgba(255, 255, 255, 0.95);
 }
 
-.liquid-glass-header {
-  background: linear-gradient(135deg, rgba(var(--brand-header-rgb, 30, 64, 175), 0.88), rgba(var(--brand-button-rgb, 29, 78, 216), 0.94)) !important;
-  backdrop-filter: blur(30px) saturate(200%) !important;
-  -webkit-backdrop-filter: blur(30px) saturate(200%) !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.22) !important;
-  box-shadow: 
-    0 8px 32px rgba(0, 0, 0, 0.14),
-    inset 0 1px 1px rgba(255, 255, 255, 0.35) !important;
+/* ── Solid brand header with no white fade or blur overlay on mobile or desktop ── */
+header, .sitepunch-header, .bg-brand-800, header.bg-brand-800, .liquid-glass-header {
+  background: var(--brand-header, #7e0b1d) !important;
+  background-color: var(--brand-header, #7e0b1d) !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18) !important;
 }
 
 .liquid-glass-btn {
