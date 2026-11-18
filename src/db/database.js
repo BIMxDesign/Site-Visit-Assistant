@@ -338,16 +338,18 @@ export async function getProject(uuid) {
   return db.projects.where('uuid').equals(uuid).first()
 }
 export async function saveProject(project) {
-  const existing = await db.projects.where('uuid').equals(project.uuid).first()
+  if (!project) return
+  const { id: _ignoredId, ...projectData } = project
+  const existing = await db.projects.where('uuid').equals(projectData.uuid).first()
   if (existing) {
     await db.projects.update(existing.id, {
-      ...project,
-      createdAt: existing.createdAt || project.createdAt || Date.now(),
+      ...projectData,
+      createdAt: existing.createdAt || projectData.createdAt || Date.now(),
       updatedAt: Date.now()
     })
     return
   }
-  await db.projects.add({ ...project, createdAt: project.createdAt || Date.now(), updatedAt: Date.now() })
+  await db.projects.add({ ...projectData, createdAt: projectData.createdAt || Date.now(), updatedAt: Date.now() })
 }
 export async function deleteProject(uuid) {
   const fps = await db.floorPlans.where('projectUuid').equals(uuid).toArray()
@@ -386,18 +388,20 @@ export async function getPhase(uuid) {
 }
 
 export async function savePhase(phase) {
-  const existing = await db.phases.where('uuid').equals(phase.uuid).first()
+  if (!phase) return
+  const { id: _ignoredId, ...phaseData } = phase
+  const existing = await db.phases.where('uuid').equals(phaseData.uuid).first()
   if (existing) {
-    await db.phases.update(existing.id, { ...phase, updatedAt: Date.now() })
+    await db.phases.update(existing.id, { ...phaseData, updatedAt: Date.now() })
     return
   }
   const all = await db.phases.toArray()
-  const count = all.filter(p => p.projectUuid && String(p.projectUuid).trim() === String(phase.projectUuid).trim()).length
+  const count = all.filter(p => p.projectUuid && String(p.projectUuid).trim() === String(phaseData.projectUuid).trim()).length
   await db.phases.add({
-    order: phase.order || count + 1,
+    order: phaseData.order || count + 1,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    ...phase,
+    ...phaseData,
   })
 }
 
@@ -443,9 +447,11 @@ export async function getFloorPlan(uuid) {
   return db.floorPlans.where('uuid').equals(uuid).first()
 }
 export async function saveFloorPlan(fp) {
-  const existing = await db.floorPlans.where('uuid').equals(fp.uuid).first()
-  if (existing) { await db.floorPlans.update(existing.id, fp); return }
-  await db.floorPlans.add({ ...fp, createdAt: Date.now() })
+  if (!fp) return
+  const { id: _ignoredId, ...fpData } = fp
+  const existing = await db.floorPlans.where('uuid').equals(fpData.uuid).first()
+  if (existing) { await db.floorPlans.update(existing.id, { ...fpData, updatedAt: Date.now() }); return }
+  await db.floorPlans.add({ ...fpData, createdAt: fpData.createdAt || Date.now() })
 }
 export async function deleteFloorPlan(uuid) {
   const fp = await db.floorPlans.where('uuid').equals(uuid).first()
@@ -494,9 +500,11 @@ export async function getPunchItem(uuid) {
   return db.punchItems.where('uuid').equals(uuid).first()
 }
 export async function savePunchItem(item) {
-  const existing = await db.punchItems.where('uuid').equals(item.uuid).first()
-  if (existing) { await db.punchItems.update(existing.id, { ...item, updatedAt: Date.now() }); return }
-  await db.punchItems.add({ ...item, createdAt: Date.now(), updatedAt: Date.now() })
+  if (!item) return
+  const { id: _ignoredId, ...itemData } = item
+  const existing = await db.punchItems.where('uuid').equals(itemData.uuid).first()
+  if (existing) { await db.punchItems.update(existing.id, { ...itemData, updatedAt: Date.now() }); return }
+  await db.punchItems.add({ ...itemData, createdAt: itemData.createdAt || Date.now(), updatedAt: Date.now() })
 }
 
 /**
@@ -753,9 +761,11 @@ export async function getPrimaryPhotos(itemUuids) {
   return map
 }
 export async function savePhoto(photo) {
-  const existing = await db.photos.where('uuid').equals(photo.uuid).first()
-  if (existing) { await db.photos.update(existing.id, photo); return }
-  await db.photos.add({ ...photo, createdAt: Date.now() })
+  if (!photo) return
+  const { id: _ignoredId, ...photoData } = photo
+  const existing = await db.photos.where('uuid').equals(photoData.uuid).first()
+  if (existing) { await db.photos.update(existing.id, photoData); return }
+  await db.photos.add({ ...photoData, createdAt: photoData.createdAt || Date.now() })
 }
 export async function deletePhoto(uuid) {
   await db.photos.where('uuid').equals(uuid).delete()
@@ -915,7 +925,20 @@ export async function downloadAllProjectsBackup() {
     ...result,
   }
 }
-export async function importProjectData(data, targetUserEmail = null, asNewCopy = false) {
+export async function getSafetyBackup(projectUuid) {
+  if (!projectUuid) return null
+  return await getSetting(`safety_backup_${projectUuid}`, null)
+}
+
+export async function restoreSafetyBackup(projectUuid) {
+  const backup = await getSafetyBackup(projectUuid)
+  if (!backup || !backup.data) {
+    throw new Error('No safety snapshot found for this project.')
+  }
+  return await importProjectData(backup.data, null, false, projectUuid)
+}
+
+export async function importProjectData(data, targetUserEmail = null, asNewCopy = false, overwriteTargetUuid = null) {
   if (!data || typeof data !== 'object') {
     throw new Error('Invalid project data format.')
   }
@@ -932,27 +955,29 @@ export async function importProjectData(data, targetUserEmail = null, asNewCopy 
     client: project.client ? String(project.client).replace(/<[^>]*>?/gm, '').trim() : '',
   }
 
-  // Check if project exists already
-  const existing = await getProject(project.uuid)
-  if (existing && asNewCopy) {
-    // Generate new UUIDs and remap
+  if (asNewCopy) {
+    // Generate new UUIDs and remap everything so existing project remains completely untouched
     const oldProjUuid = project.uuid
     const newProjUuid = uuidv4()
-    project = { ...project, uuid: newProjUuid, name: `${project.name} (Imported)` }
+    const cleanName = project.name.endsWith('(Imported)') ? project.name : `${project.name} (Imported)`
+    const { id: _pId, ...cleanProject } = project
+    project = { ...cleanProject, uuid: newProjUuid, name: cleanName }
 
     const phaseMap = {}
     phases = phases.map(ph => {
       const newPhUuid = uuidv4()
       phaseMap[ph.uuid] = newPhUuid
-      return { ...ph, uuid: newPhUuid, projectUuid: newProjUuid }
+      const { id: _id, ...cleanPh } = ph
+      return { ...cleanPh, uuid: newPhUuid, projectUuid: newProjUuid }
     })
 
     const fpMap = {}
     floorPlans = floorPlans.map(fp => {
       const newFpUuid = uuidv4()
       fpMap[fp.uuid] = newFpUuid
+      const { id: _id, ...cleanFp } = fp
       return {
-        ...fp,
+        ...cleanFp,
         uuid: newFpUuid,
         projectUuid: newProjUuid,
         phaseUuid: phaseMap[fp.phaseUuid] || fp.phaseUuid,
@@ -963,26 +988,87 @@ export async function importProjectData(data, targetUserEmail = null, asNewCopy 
     items = items.map(item => {
       const newItemUuid = uuidv4()
       itemMap[item.uuid] = newItemUuid
+      const { id: _id, ...cleanItem } = item
       return {
-        ...item,
+        ...cleanItem,
         uuid: newItemUuid,
         projectUuid: newProjUuid,
         floorPlanUuid: fpMap[item.floorPlanUuid] || item.floorPlanUuid,
+        phaseUuid: phaseMap[item.phaseUuid] || item.phaseUuid,
       }
     })
 
-    photos = photos.map(photo => ({
-      ...photo,
-      uuid: uuidv4(),
-      punchItemUuid: itemMap[photo.punchItemUuid] || photo.punchItemUuid,
-    }))
+    photos = photos.map(photo => {
+      const { id: _id, ...cleanPhoto } = photo
+      return {
+        ...cleanPhoto,
+        uuid: uuidv4(),
+        punchItemUuid: itemMap[photo.punchItemUuid] || photo.punchItemUuid,
+      }
+    })
 
     // Remap licenses to new project/phase UUIDs
-    licenses = licenses.map(lic => ({
-      ...lic,
-      projectUuid: newProjUuid,
-      reportUuid: phaseMap[lic.reportUuid] || lic.reportUuid,
-    }))
+    licenses = (licenses || []).map(lic => {
+      const { id: _id, ...cleanLic } = lic
+      return {
+        ...cleanLic,
+        projectUuid: newProjUuid,
+        reportUuid: phaseMap[lic.reportUuid] || lic.reportUuid,
+      }
+    })
+  } else {
+    // Overwrite mode:
+    // Identify target project to overwrite
+    const targetUuid = overwriteTargetUuid || project.uuid
+    const targetExisting = targetUuid ? (await getProject(targetUuid)) : null
+
+    if (targetExisting) {
+      // 1. Preserve local license if target project has active license
+      const localLic = await getProjectLicense(targetExisting.uuid)
+      if (localLic && !project.isLicensed) {
+        project.isLicensed = true
+        project.licenseKey = localLic.licenseKey
+        if (!licenses.some(l => l.licenseKey === localLic.licenseKey)) {
+          licenses.push(localLic)
+        }
+      }
+
+      // 2. Automatic safety restore snapshot saved in DB
+      try {
+        const safetyBackup = await exportProjectData(targetExisting.uuid)
+        await setSetting(`safety_backup_${targetExisting.uuid}`, {
+          timestamp: Date.now(),
+          projectName: targetExisting.name,
+          data: safetyBackup
+        })
+      } catch (backupErr) {
+        console.warn('Pre-overwrite safety snapshot could not be saved:', backupErr)
+      }
+
+      // 3. Cleanly delete old project records so no orphaned items/photos remain
+      await deleteProject(targetExisting.uuid)
+    }
+
+    // Strip id from all entities
+    const { id: _pId, ...cleanProject } = project
+    project = cleanProject
+
+    phases = phases.map(ph => {
+      const { id: _id, ...cleanPh } = ph
+      return cleanPh
+    })
+    floorPlans = floorPlans.map(fp => {
+      const { id: _id, ...cleanFp } = fp
+      return cleanFp
+    })
+    items = items.map(item => {
+      const { id: _id, ...cleanItem } = item
+      return cleanItem
+    })
+    photos = photos.map(photo => {
+      const { id: _id, ...cleanPhoto } = photo
+      return cleanPhoto
+    })
   }
 
   if (targetUserEmail) {
@@ -990,10 +1076,18 @@ export async function importProjectData(data, targetUserEmail = null, asNewCopy 
   }
 
   await saveProject(project)
-  for (const ph of phases)      await savePhase(ph)
-  for (const fp  of floorPlans) await saveFloorPlan(fp)
-  for (const item of items)     await savePunchItem(item)
-  for (const ph  of photos)     await savePhoto(ph)
+  for (const ph of phases) {
+    try { await savePhase(ph) } catch (e) { console.warn('Failed saving phase:', e) }
+  }
+  for (const fp of floorPlans) {
+    try { await saveFloorPlan(fp) } catch (e) { console.warn('Failed saving floorPlan:', e) }
+  }
+  for (const item of items) {
+    try { await savePunchItem(item) } catch (e) { console.warn('Failed saving punchItem:', e) }
+  }
+  for (const ph of photos) {
+    try { await savePhoto(ph) } catch (e) { console.warn('Failed saving photo:', e) }
+  }
 
   // Retain and preserve license information across devices
   await importAndPreserveLicenses(licenses, project)
@@ -1024,6 +1118,18 @@ export async function mergeProjectData(targetProjectUuid, data) {
   let { project: incomingProject, phases = [], floorPlans = [], items = [], photos = [], licenses = [] } = data
   if (!incomingProject || !incomingProject.name) {
     throw new Error('Invalid project file: missing project details.')
+  }
+
+  // Automatic safety snapshot of target project before merge
+  try {
+    const safetyBackup = await exportProjectData(targetProjectUuid)
+    await setSetting(`safety_backup_${targetProjectUuid}`, {
+      timestamp: Date.now(),
+      projectName: targetProject.name,
+      data: safetyBackup
+    })
+  } catch (backupErr) {
+    console.warn('Pre-merge safety snapshot could not be saved:', backupErr)
   }
 
   const stats = {
@@ -1067,8 +1173,9 @@ export async function mergeProjectData(targetProjectUuid, data) {
     } else {
       const newPhaseUuid = uuidv4()
       phaseMap[ph.uuid] = newPhaseUuid
+      const { id: _id, ...cleanPh } = ph
       const newPhase = {
-        ...ph,
+        ...cleanPh,
         uuid: newPhaseUuid,
         projectUuid: targetProjectUuid,
         order: existingPhases.length + stats.reportsAdded + 1,
@@ -1098,8 +1205,9 @@ export async function mergeProjectData(targetProjectUuid, data) {
     } else {
       const newFpUuid = uuidv4()
       fpMap[fp.uuid] = newFpUuid
+      const { id: _id, ...cleanFp } = fp
       const newFp = {
-        ...fp,
+        ...cleanFp,
         uuid: newFpUuid,
         projectUuid: targetProjectUuid,
         phaseUuid: mappedPhaseUuid,
@@ -1140,6 +1248,7 @@ export async function mergeProjectData(targetProjectUuid, data) {
           status: item.status || match.status,
           priority: item.priority || match.priority,
           category: item.category || match.category,
+          trade: item.trade || match.trade,
           updatedAt: Date.now()
         })
         stats.itemsUpdated++
@@ -1147,8 +1256,9 @@ export async function mergeProjectData(targetProjectUuid, data) {
     } else {
       const newItemUuid = uuidv4()
       itemMap[item.uuid] = newItemUuid
+      const { id: _id, ...cleanItem } = item
       const newItem = {
-        ...item,
+        ...cleanItem,
         uuid: newItemUuid,
         projectUuid: targetProjectUuid,
         floorPlanUuid: mappedFpUuid,
@@ -1170,12 +1280,15 @@ export async function mergeProjectData(targetProjectUuid, data) {
 
     const photoExists = existingPhotos.some(
       ep => ep.punchItemUuid === mappedItemUuid &&
-            (ep.uuid === photo.uuid || (ep.dataUrl && photo.dataUrl && ep.dataUrl.slice(0, 300) === photo.dataUrl.slice(0, 300)))
+            (ep.uuid === photo.uuid ||
+             ((ep.imageData || ep.dataUrl) && (photo.imageData || photo.dataUrl) &&
+              (ep.imageData || ep.dataUrl).slice(0, 300) === (photo.imageData || photo.dataUrl).slice(0, 300)))
     )
 
     if (!photoExists) {
+      const { id: _id, ...cleanPhoto } = photo
       const newPhoto = {
-        ...photo,
+        ...cleanPhoto,
         uuid: uuidv4(),
         punchItemUuid: mappedItemUuid,
         createdAt: photo.createdAt || Date.now()
@@ -1187,8 +1300,8 @@ export async function mergeProjectData(targetProjectUuid, data) {
   }
 
   // 7. Retain & preserve licenses if either project has an active license
-  if (incomingProject.isLicensed || licenses.length > 0) {
-    const remappedLicenses = licenses.map(lic => ({
+  if (incomingProject.isLicensed || (licenses && licenses.length > 0) || targetProject.isLicensed) {
+    const remappedLicenses = (licenses || []).map(lic => ({
       ...lic,
       projectUuid: targetProjectUuid,
       reportUuid: phaseMap[lic.reportUuid] || lic.reportUuid
@@ -1199,7 +1312,12 @@ export async function mergeProjectData(targetProjectUuid, data) {
   }
 
   // Resequence pins and update project counts
-  await resequenceReportPins({ projectUuid: targetProjectUuid })
+  try {
+    await resequenceReportPins({ projectUuid: targetProjectUuid })
+  } catch (reseqErr) {
+    console.warn('Resequence pins during merge notice:', reseqErr)
+  }
+
   const finalItems = await getPunchItems(targetProjectUuid)
   const openCount = finalItems.filter(i => isObservationOpenStatus(i.status)).length
   updatedProject.totalItems = finalItems.length

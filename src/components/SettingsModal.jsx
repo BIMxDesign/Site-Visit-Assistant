@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, Layers, HelpCircle, CheckCircle, RefreshCw, Copy, Sparkles, X, Camera,
   ScrollText, FileDown, Archive, FileSpreadsheet, ChevronRight, Package,
   Cloud, CloudUpload, CloudDownload, Share2, Laptop, HardDrive, Wifi, WifiOff,
-  Flame, Zap, Globe, Database, Eye, EyeOff, ExternalLink
+  Flame, Zap, Globe, Database, Eye, EyeOff, ExternalLink, GitMerge
 } from 'lucide-react'
 import { usePwa } from '../utils/pwa'
 import {
@@ -31,7 +31,8 @@ import {
 import { useAppStore } from '../store/useAppStore'
 import {
   db, getSetting, setSetting, getAllProjects, deleteProject,
-  downloadProjectBackup, downloadAllProjectsBackup, getAllProjectsBackupBlob, importProjectData, updateUserProfile,
+  downloadProjectBackup, downloadAllProjectsBackup, getAllProjectsBackupBlob, importProjectData, mergeProjectData,
+  getSafetyBackup, restoreSafetyBackup, exportProjectData, getPhases, getPunchItems, updateUserProfile,
   getExportLogs, getAllExportLogSummaries, getAllExportLogsFlat,
 } from '../db/database'
 import { Field, INPUT, Spinner } from './NewProjectModal'
@@ -735,10 +736,16 @@ export default function SettingsModal() {
 
       if (existing) {
         setImporting(false)
+        const localPhases = await getPhases(existing.uuid).catch(() => [])
+        const localItems = await getPunchItems(existing.uuid).catch(() => [])
         setImportConflictData({
           fileData: data,
           fileName: file.name,
-          existingProject: existing
+          existingProject: existing,
+          localReportCount: localPhases.length,
+          localItemCount: localItems.length,
+          incomingReportCount: data.phases?.length || 0,
+          incomingItemCount: data.items?.length || 0,
         })
         return
       }
@@ -769,6 +776,59 @@ export default function SettingsModal() {
     } catch (err) {
       console.error('Import execution failed:', err)
       alert(`Import failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Execute intelligent non-destructive merge (Zero Data Loss)
+  async function executeMerge(targetUuid, data) {
+    setImporting(true)
+    try {
+      const stats = await mergeProjectData(targetUuid, data)
+      await loadProjects()
+      reloadLicenses()
+      setImportConflictData(null)
+      alert(
+        `Project Successfully Merged (Zero Data Loss)!\n\n` +
+        `• Target: "${stats.targetProjectName}"\n` +
+        `• Reports: ${stats.reportsMatched} matched, ${stats.reportsAdded} new added\n` +
+        `• Key Plans: ${stats.keyPlansMatched} matched, ${stats.keyPlansAdded} new added\n` +
+        `• Observations: ${stats.itemsUpdated} updated, ${stats.itemsAdded} new added\n` +
+        `• Photos: ${stats.photosAdded} photos merged\n` +
+        (stats.licensePreserved ? `• Active License Preserved` : '')
+      )
+    } catch (err) {
+      console.error('Merge execution failed:', err)
+      alert(`Merge failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Execute clean overwrite with automatic safety snapshot (Zero Data Loss)
+  async function executeOverwrite(data, targetUuid) {
+    const projName = importConflictData?.existingProject?.name || data.project?.name || 'this project'
+    if (!window.confirm(`Are you sure you want to replace "${projName}" with this backup?\n\nAn automatic safety restore snapshot will be saved first so your current project can be restored at any time.`)) {
+      return
+    }
+    setImporting(true)
+    try {
+      const importedProj = await importProjectData(data, null, false, targetUuid)
+      await loadProjects()
+      reloadLicenses()
+      setImportConflictData(null)
+      alert(
+        `Project "${importedProj.name}" successfully replaced!\n\n` +
+        `• ${data.phases?.length || 0} Reports\n` +
+        `• ${data.floorPlans?.length || 0} Key Plans\n` +
+        `• ${data.items?.length || 0} Punch Items\n` +
+        `• Safety restore snapshot automatically created\n` +
+        (importedProj.isLicensed ? `• License Preserved (Exports Unlocked)` : '')
+      )
+    } catch (err) {
+      console.error('Overwrite failed:', err)
+      alert(`Overwrite failed: ${err.message || 'Unknown error'}`)
     } finally {
       setImporting(false)
     }
@@ -2577,21 +2637,60 @@ export default function SettingsModal() {
               </div>
               <div>
                 <h3 className="text-base font-bold text-gray-900">Project Already Exists</h3>
-                <p className="text-xs text-gray-500">Choose how to handle the incoming project</p>
+                <p className="text-xs text-gray-500">Choose how to handle the incoming project without data loss</p>
               </div>
             </div>
 
             <p className="text-xs text-gray-600 leading-relaxed">
-              A project named <strong className="text-gray-900 font-bold">"{importConflictData.existingProject.name}"</strong> already exists on this device. How would you like to proceed?
+              A project named <strong className="text-gray-900 font-bold">"{importConflictData.existingProject.name}"</strong> already exists on this device.
             </p>
 
+            {/* Comparison Overview */}
+            <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-gray-50 border border-gray-200/80 text-[11px]">
+              <div className="space-y-0.5">
+                <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">On This Device</span>
+                <p className="font-bold text-gray-900">
+                  {importConflictData.localReportCount ?? '—'} Reports • {importConflictData.localItemCount ?? '—'} Observations
+                </p>
+              </div>
+              <div className="space-y-0.5 border-l border-gray-200 pl-2.5">
+                <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Incoming Backup</span>
+                <p className="font-bold text-gray-900">
+                  {importConflictData.incomingReportCount ?? '—'} Reports • {importConflictData.incomingItemCount ?? '—'} Observations
+                </p>
+              </div>
+            </div>
+
             <div className="space-y-2.5 text-xs">
-              {/* Option 1: Copy */}
+              {/* Option 1: Merge Data (Recommended - Zero Data Loss) */}
+              <button
+                type="button"
+                onClick={() => executeMerge(importConflictData.existingProject.uuid, importConflictData.fileData)}
+                disabled={importing}
+                className="w-full text-left p-3.5 rounded-xl border-2 border-emerald-300 bg-emerald-50/70 hover:bg-emerald-50 hover:border-emerald-400 transition-all flex items-start gap-3 group cursor-pointer shadow-xs"
+              >
+                <div className="p-2 bg-emerald-600 text-white rounded-lg group-hover:scale-105 transition-transform flex-shrink-0">
+                  <GitMerge size={18} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-emerald-950 text-xs">Merge Data</p>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-200 text-emerald-800">
+                      Recommended • Zero Data Loss
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-emerald-900 mt-1 leading-snug">
+                    Safely combines reports, drawings, observations, and photos into your existing project. No local work is deleted or lost.
+                  </p>
+                </div>
+              </button>
+
+              {/* Option 2: Copy */}
               <button
                 type="button"
                 onClick={() => executeImport(importConflictData.fileData, true)}
                 disabled={importing}
-                className="w-full text-left p-3.5 rounded-xl border border-blue-200 bg-blue-50/60 hover:bg-blue-50 hover:border-blue-300 transition-all flex items-start gap-3 group cursor-pointer"
+                className="w-full text-left p-3 rounded-xl border border-blue-200 bg-blue-50/50 hover:bg-blue-50 hover:border-blue-300 transition-all flex items-start gap-3 group cursor-pointer"
               >
                 <div className="p-2 bg-brand-600 text-white rounded-lg group-hover:scale-105 transition-transform flex-shrink-0">
                   <Copy size={16} />
@@ -2599,29 +2698,25 @@ export default function SettingsModal() {
                 <div>
                   <p className="font-bold text-blue-950 text-xs">Import as New Duplicate Copy</p>
                   <p className="text-[11px] text-blue-800 mt-0.5">
-                    Creates a separate duplicate named <em>"{importConflictData.fileData.project.name} (Imported)"</em> so existing project remains untouched.
+                    Creates a separate duplicate named <em>"{importConflictData.fileData.project.name} (Imported)"</em> so existing project remains completely untouched.
                   </p>
                 </div>
               </button>
 
-              {/* Option 2: Overwrite */}
+              {/* Option 3: Overwrite */}
               <button
                 type="button"
-                onClick={() => {
-                  if (window.confirm(`Are you sure you want to completely overwrite "${importConflictData.existingProject.name}" with this backup? Local changes will be replaced.`)) {
-                    executeImport(importConflictData.fileData, false)
-                  }
-                }}
+                onClick={() => executeOverwrite(importConflictData.fileData, importConflictData.existingProject.uuid)}
                 disabled={importing}
                 className="w-full text-left p-3 rounded-xl border border-gray-200 bg-gray-50 hover:bg-red-50 hover:border-red-200 transition-all flex items-start gap-3 group cursor-pointer"
               >
-                <div className="p-2 bg-gray-600 text-white rounded-lg group-hover:bg-red-600 transition-colors flex-shrink-0">
+                <div className="p-2 bg-gray-500 text-white rounded-lg group-hover:bg-red-600 transition-colors flex-shrink-0">
                   <RefreshCw size={16} />
                 </div>
                 <div>
                   <p className="font-bold text-gray-800 group-hover:text-red-900 text-xs">Overwrite / Replace Existing Project</p>
                   <p className="text-[11px] text-gray-500 group-hover:text-red-700 mt-0.5">
-                    Replaces local project data completely with the imported file.
+                    Replaces local project data with this backup. An automatic safety restore snapshot will be created beforehand so nothing can be permanently lost.
                   </p>
                 </div>
               </button>
