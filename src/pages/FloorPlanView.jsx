@@ -24,7 +24,7 @@ import { v4 as uuidv4 } from 'uuid'
 import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ObservationStatusSelect from '../components/ObservationStatusSelect'
-import { truncateObservationTitle, formatDatePattern, normalizeObservationStatus } from '../utils/formatters'
+import { truncateObservationTitle, formatDatePattern, normalizeObservationStatus, stripHtmlToPlainText } from '../utils/formatters'
 import { hexToRgb } from '../utils/theme'
 
 const PIN_SIZE = 28
@@ -1652,24 +1652,36 @@ export default function FloorPlanView() {
                   >
                     {/* Top Section: Grip, Pin #, Title & Core Details, Photo, Desktop Actions */}
                     <div className="flex items-center gap-2.5 sm:gap-3.5 w-full">
-                      {/* Drag Grip Handle for Mouse and Touch / Finger */}
-                      <div
-                        className={`flex items-center justify-center p-1 sm:p-1.5 -ml-1 text-gray-400 transition-colors ${
-                          obsFilter === 'All'
-                            ? 'hover:text-brand-600 active:text-brand-700 cursor-grab active:cursor-grabbing hover:bg-white/60'
-                            : 'cursor-not-allowed opacity-40'
-                        } flex-shrink-0 touch-none rounded-lg`}
-                        title={obsFilter === 'All' ? 'Drag with mouse or finger to reorder sequence' : 'Clear filter to reorder sequence'}
-                        style={{ touchAction: 'none' }}
-                        onPointerDown={(e) => obsFilter === 'All' && handleObsGripPointerDown(e, item.uuid, idx)}
-                        onPointerMove={obsFilter === 'All' ? handleObsGripPointerMove : undefined}
-                        onPointerUp={obsFilter === 'All' ? handleObsGripPointerUp : undefined}
-                        onTouchStart={(e) => obsFilter === 'All' && handleObsGripTouchStart(e, item.uuid, idx)}
-                        onTouchMove={obsFilter === 'All' ? handleObsGripTouchMove : undefined}
-                        onTouchEnd={obsFilter === 'All' ? handleObsGripTouchEnd : undefined}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <GripVertical size={20} className="block pointer-events-none" />
+                      {/* Up and Down reorder chevrons on the left before Pin Number */}
+                      <div className="flex flex-col items-center justify-center -my-1 -ml-1 text-gray-400 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleMoveObservation(item.uuid, 'up')
+                          }}
+                          disabled={idx === 0 || obsFilter !== 'All'}
+                          className={`p-0.5 rounded hover:bg-white/60 transition-colors cursor-pointer ${
+                            idx > 0 && obsFilter === 'All' ? 'text-gray-600 hover:text-brand-600 active:scale-95' : 'text-gray-300 cursor-not-allowed opacity-30'
+                          }`}
+                          title={obsFilter === 'All' ? 'Move observation up (updates sequence)' : 'Clear filter to reorder'}
+                        >
+                          <ChevronUp size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleMoveObservation(item.uuid, 'down')
+                          }}
+                          disabled={idx === sortedItems.length - 1 || obsFilter !== 'All'}
+                          className={`p-0.5 rounded hover:bg-white/60 transition-colors cursor-pointer ${
+                            idx < sortedItems.length - 1 && obsFilter === 'All' ? 'text-gray-600 hover:text-brand-600 active:scale-95' : 'text-gray-300 cursor-not-allowed opacity-30'
+                          }`}
+                          title={obsFilter === 'All' ? 'Move observation down (updates sequence)' : 'Clear filter to reorder'}
+                        >
+                          <ChevronDown size={16} />
+                        </button>
                       </div>
 
                       {/* Pin Number Badge */}
@@ -1682,12 +1694,12 @@ export default function FloorPlanView() {
 
                       {/* Content (Title, Badges, Trade, Due Date) */}
                       <div className="flex-1 min-w-0">
-                        {/* Observation Title - prominent full width row, highly visible on phone views */}
+                        {/* Observation Title - ONLY single line with '...' */}
                         <h4
-                          className="font-bold text-sm text-gray-900 leading-snug line-clamp-2 sm:line-clamp-1 block"
+                          className="font-bold text-sm text-gray-900 leading-snug truncate block"
                           title={item.title || item.notes || `Observation #${item.itemNumber}`}
                         >
-                          {truncateObservationTitle(item.title || item.notes || `Observation #${item.itemNumber}`, 80)}
+                          {(item.title || item.notes ? stripHtmlToPlainText(item.title || item.notes) : '') || `Observation #${item.itemNumber}`}
                         </h4>
 
                         {/* Badges Row: Status dropdown, Priority, Extra Pins */}
@@ -1736,34 +1748,8 @@ export default function FloorPlanView() {
                         )}
                       </div>
 
-                      {/* Desktop Action Buttons: Move Up / Down, Edit, Delete (hidden on mobile, shown on sm+) */}
+                      {/* Desktop Action Buttons: Edit, Delete (hidden on mobile, shown on sm+) */}
                       <div className="hidden sm:flex items-center gap-1 flex-shrink-0 self-center">
-                        <div className="flex flex-col mr-1 border-r border-gray-200 pr-1">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleMoveObservation(item.uuid, 'up')
-                            }}
-                            disabled={idx === 0 || obsFilter !== 'All'}
-                            className={`p-1 rounded transition-colors cursor-pointer ${idx > 0 && obsFilter === 'All' ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-                            title={obsFilter === 'All' ? 'Move observation up (updates sequence)' : 'Clear filter to reorder'}
-                          >
-                            <ChevronUp size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleMoveObservation(item.uuid, 'down')
-                            }}
-                            disabled={idx === sortedItems.length - 1 || obsFilter !== 'All'}
-                            className={`p-1 rounded transition-colors cursor-pointer ${idx < sortedItems.length - 1 && obsFilter === 'All' ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-                            title={obsFilter === 'All' ? 'Move observation down (updates sequence)' : 'Clear filter to reorder'}
-                          >
-                            <ChevronDown size={14} />
-                          </button>
-                        </div>
                         <button
                           type="button"
                           onClick={(e) => {
@@ -1790,37 +1776,8 @@ export default function FloorPlanView() {
                       </div>
                     </div>
 
-                    {/* Mobile Action Footer Bar: Touch-friendly Up/Down, Edit, Delete (strictly on phones < sm) */}
-                    <div className="flex sm:hidden items-center justify-between pt-2 border-t border-gray-150/80 mt-1 pl-10 pr-0.5">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleMoveObservation(item.uuid, 'up')
-                          }}
-                          disabled={idx === 0 || obsFilter !== 'All'}
-                          className={`p-1 px-2 rounded-lg border border-gray-250 bg-white transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold ${idx > 0 && obsFilter === 'All' ? 'text-gray-700 hover:text-brand-600 active:bg-gray-100' : 'text-gray-300 cursor-not-allowed opacity-50'}`}
-                          title={obsFilter === 'All' ? 'Move observation up' : 'Clear filter to reorder'}
-                        >
-                          <ChevronUp size={13} />
-                          <span>Up</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleMoveObservation(item.uuid, 'down')
-                          }}
-                          disabled={idx === sortedItems.length - 1 || obsFilter !== 'All'}
-                          className={`p-1 px-2 rounded-lg border border-gray-250 bg-white transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold ${idx < sortedItems.length - 1 && obsFilter === 'All' ? 'text-gray-700 hover:text-brand-600 active:bg-gray-100' : 'text-gray-300 cursor-not-allowed opacity-50'}`}
-                          title={obsFilter === 'All' ? 'Move observation down' : 'Clear filter to reorder'}
-                        >
-                          <ChevronDown size={13} />
-                          <span>Down</span>
-                        </button>
-                      </div>
-
+                    {/* Mobile Action Footer Bar: Touch-friendly Edit, Delete (strictly on phones < sm) */}
+                    <div className="flex sm:hidden items-center justify-end pt-1.5 border-t border-gray-150/80 mt-1 pl-10 pr-0.5 gap-2">
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"

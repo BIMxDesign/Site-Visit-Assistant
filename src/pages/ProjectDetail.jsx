@@ -24,7 +24,7 @@ import EditProjectModal from '../components/EditProjectModal'
 import PhaseModal from '../components/PhaseModal'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ObservationStatusSelect from '../components/ObservationStatusSelect'
-import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern, normalizeObservationStatus } from '../utils/formatters'
+import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern, normalizeObservationStatus, stripHtmlToPlainText } from '../utils/formatters'
 import { hexToRgb } from '../utils/theme'
 
 const REPORT_FILTER_OPTIONS = [
@@ -2339,21 +2339,33 @@ function FloorPlanCard({
         boxShadow: `0 4px 18px -2px rgba(${r}, ${g}, ${b}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,
       }}
     >
-      {/* Drag Grip Handle for Mouse and Touch / Finger */}
-      <div
-        className="flex items-center justify-center p-1.5 -ml-1 text-gray-400 hover:text-brand-600 active:text-brand-700 cursor-grab active:cursor-grabbing flex-shrink-0 touch-none rounded-lg hover:bg-white/60 transition-colors"
-        title="Drag with mouse or finger to reorder key plan sequence"
-        style={{ touchAction: 'none' }}
-        onPointerDown={(e) => onGripPointerDown(e, fp.uuid, index - 1)}
-        onPointerMove={onGripPointerMove}
-        onPointerUp={onGripPointerUp}
-        onTouchStart={(e) => onGripTouchStart(e, fp.uuid, index - 1)}
-        onTouchMove={onGripTouchMove}
-        onTouchEnd={onGripTouchEnd}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <GripVertical size={20} className="block pointer-events-none" />
-      </div>
+      {/* Up and Down Reorder Chevrons on the left before PINS button */}
+      {onMoveUp && onMoveDown && (
+        <div className="flex flex-col items-center justify-center -my-1 -ml-0.5 text-gray-400 flex-shrink-0">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveUp() }}
+            disabled={!canMoveUp}
+            className={`p-0.5 rounded hover:bg-white/60 transition-colors cursor-pointer ${
+              canMoveUp ? 'text-gray-600 hover:text-brand-600 active:scale-95' : 'text-gray-300 cursor-not-allowed opacity-30'
+            }`}
+            title="Move key plan up (updates pin sequence)"
+          >
+            <ChevronUp size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveDown() }}
+            disabled={!canMoveDown}
+            className={`p-0.5 rounded hover:bg-white/60 transition-colors cursor-pointer ${
+              canMoveDown ? 'text-gray-600 hover:text-brand-600 active:scale-95' : 'text-gray-300 cursor-not-allowed opacity-30'
+            }`}
+            title="Move key plan down (updates pin sequence)"
+          >
+            <ChevronDown size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Pin count accordion toggle button: height matches the h-14 preview card next to it */}
       <div className="flex flex-col items-center justify-center flex-shrink-0">
@@ -2402,28 +2414,8 @@ function FloorPlanCard({
         }
       </div>
 
-      {/* Action buttons: Move Up / Down, Rename, Delete */}
+      {/* Action buttons: Rename, Delete */}
       <div className="flex items-center gap-1 flex-shrink-0">
-        {onMoveUp && onMoveDown && (
-          <div className="flex flex-col mr-1 border-r border-gray-200 pr-1">
-            <button
-              onClick={(e) => { e.stopPropagation(); onMoveUp() }}
-              disabled={!canMoveUp}
-              className={`p-1 rounded transition-colors cursor-pointer ${canMoveUp ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-              title="Move key plan up (updates pin sequence)"
-            >
-              <ChevronUp size={14} />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onMoveDown() }}
-              disabled={!canMoveDown}
-              className={`p-1 rounded transition-colors cursor-pointer ${canMoveDown ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-              title="Move key plan down (updates pin sequence)"
-            >
-              <ChevronDown size={14} />
-            </button>
-          </div>
-        )}
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -2479,6 +2471,8 @@ function PunchItemRow({
   const pinColor = useAppStore(s => s.pinColor)
   const { r, g, b } = hexToRgb(pinColor)
   const itemPhoto = photo || item.imageData || item.photo || item.primaryPhoto
+  const rawTitle = item.title || item.notes
+  const fullTitle = (rawTitle ? stripHtmlToPlainText(rawTitle) : '') || `Observation #${item.itemNumber}`
   return (
     <div
       data-item-uuid={item.uuid}
@@ -2489,7 +2483,7 @@ function PunchItemRow({
       onDrop={(e) => onDrop && onDrop(e, item.uuid)}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`liquid-glass-card rounded-2xl p-3.5 flex gap-3 items-center cursor-pointer group transition-all select-none border border-l-4 ${
+      className={`liquid-glass-card rounded-2xl p-2.5 sm:p-3.5 flex gap-2.5 sm:gap-3 items-start sm:items-center cursor-pointer group transition-all select-none border border-l-4 ${
         isDragging
           ? 'opacity-40 border-dashed border-brand-400 scale-[0.98]'
           : isDragOver
@@ -2503,21 +2497,31 @@ function PunchItemRow({
         boxShadow: `0 4px 18px -2px rgba(${r}, ${g}, ${b}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,
       }}
     >
-      {/* Drag Grip Handle for Mouse and Touch / Finger */}
-      {draggable && (
-        <div
-          className="flex items-center justify-center p-1.5 -ml-1 text-gray-400 hover:text-brand-600 active:text-brand-700 cursor-grab active:cursor-grabbing flex-shrink-0 touch-none rounded-lg hover:bg-white/60 transition-colors"
-          title="Drag with mouse or finger to reorder observation sequence"
-          style={{ touchAction: 'none' }}
-          onPointerDown={onPointerDownGrip}
-          onPointerMove={onPointerMoveGrip}
-          onPointerUp={onPointerUpGrip}
-          onTouchStart={onTouchStartGrip}
-          onTouchMove={onTouchMoveGrip}
-          onTouchEnd={onTouchEndGrip}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <GripVertical size={20} className="block pointer-events-none" />
+      {/* Up and Down Reorder Chevrons ON THE LEFT BEFORE PIN NUMBER */}
+      {onMoveUp && onMoveDown && (
+        <div className="flex flex-col items-center justify-center -my-1 -ml-0.5 text-gray-400 flex-shrink-0">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveUp() }}
+            disabled={!canMoveUp}
+            className={`p-0.5 rounded hover:bg-white/60 transition-colors cursor-pointer ${
+              canMoveUp ? 'text-gray-600 hover:text-brand-600 active:scale-95' : 'text-gray-300 cursor-not-allowed opacity-30'
+            }`}
+            title="Move observation up (updates sequence)"
+          >
+            <ChevronUp size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveDown() }}
+            disabled={!canMoveDown}
+            className={`p-0.5 rounded hover:bg-white/60 transition-colors cursor-pointer ${
+              canMoveDown ? 'text-gray-600 hover:text-brand-600 active:scale-95' : 'text-gray-300 cursor-not-allowed opacity-30'
+            }`}
+            title="Move observation down (updates sequence)"
+          >
+            <ChevronDown size={16} />
+          </button>
         </div>
       )}
 
@@ -2532,29 +2536,57 @@ function PunchItemRow({
       {/* Observation Title & Details */}
       <div className="flex-1 min-w-0">
         <h4
-          className="font-bold text-gray-900 text-sm leading-snug line-clamp-2 sm:line-clamp-1 block"
-          title={item.title || item.notes || `Observation #${item.itemNumber}`}
+          className="font-bold text-gray-900 text-sm leading-snug truncate block"
+          title={fullTitle}
         >
-          {truncateObservationTitle(item.title || item.notes || `Observation #${item.itemNumber}`, 80)}
+          {fullTitle}
         </h4>
-        <div className="flex gap-2 mt-1 flex-wrap items-center">
-          <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="sm" />
-          {item.priority && (
-            <span className={`text-xs px-2 py-0.5 rounded-full font-bold shadow-2xs ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
-              {item.priority}
-            </span>
-          )}
-          {item.trade && <span className="text-xs text-gray-500 font-semibold">{item.trade}</span>}
-          {floorPlan && (
-            <span className="text-xs text-gray-400 flex items-center gap-1 font-medium">
-              • {showPhase && phase ? `${phase.name} › ` : ''}{floorPlan.name}
-            </span>
-          )}
+
+        {/* Badges and Phone Actions Row below Title */}
+        <div className="flex items-center justify-between gap-1.5 mt-1.5 flex-wrap">
+          <div className="flex gap-1.5 flex-wrap items-center">
+            <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="sm" />
+            {item.priority && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-bold shadow-2xs ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
+                {item.priority}
+              </span>
+            )}
+            {item.trade && <span className="text-xs text-gray-500 font-semibold">{item.trade}</span>}
+            {floorPlan && (
+              <span className="text-xs text-gray-400 flex items-center gap-1 font-medium">
+                • {showPhase && phase ? `${phase.name} › ` : ''}{floorPlan.name}
+              </span>
+            )}
+          </div>
+
+          {/* Action buttons slid down below the title for phone view (<sm) */}
+          <div className="flex sm:hidden items-center gap-1 flex-shrink-0 ml-auto">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (onEdit) onEdit()
+                else if (onClick) onClick()
+              }}
+              className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
+              title="Edit observation"
+            >
+              <Edit2 size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); onDelete() }}
+              className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 flex items-center justify-center cursor-pointer transition-colors"
+              title="Delete punch item"
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Observation Photo Thumbnail on right side */}
-      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center">
+      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center self-center">
         {itemPhoto ? (
           <img src={itemPhoto} alt={item.title || `Observation #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
         ) : (
@@ -2562,29 +2594,10 @@ function PunchItemRow({
         )}
       </div>
 
-      {/* Action buttons: Move Up / Down, Edit, Delete */}
-      <div className="flex items-center gap-1 flex-shrink-0">
-        {onMoveUp && onMoveDown && (
-          <div className="flex flex-col mr-1 border-r border-gray-200 pr-1">
-            <button
-              onClick={(e) => { e.stopPropagation(); onMoveUp() }}
-              disabled={!canMoveUp}
-              className={`p-1 rounded transition-colors cursor-pointer ${canMoveUp ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-              title="Move observation up (updates sequence)"
-            >
-              <ChevronUp size={14} />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onMoveDown() }}
-              disabled={!canMoveDown}
-              className={`p-1 rounded transition-colors cursor-pointer ${canMoveDown ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-              title="Move observation down (updates sequence)"
-            >
-              <ChevronDown size={14} />
-            </button>
-          </div>
-        )}
+      {/* Desktop Action buttons: Edit, Delete (hidden on phone, visible on sm+) */}
+      <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation()
             if (onEdit) onEdit()
@@ -2596,6 +2609,7 @@ function PunchItemRow({
           <Edit2 size={15} />
         </button>
         <button
+          type="button"
           onClick={e => { e.stopPropagation(); onDelete() }}
           className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-500 flex items-center justify-center cursor-pointer transition-colors"
           title="Delete punch item"
