@@ -606,20 +606,45 @@ export async function resequenceReportPins(arg1, arg2) {
   const targetItems = reportItems.length > 0 ? reportItems : allItems
   if (targetItems.length === 0) return
 
-  // Organize pins strictly drawing-by-drawing in the drawing sequence
-  const finalOrderedPins = []
-
-  // Drawing 1 pins, then Drawing 2 pins, then Drawing 3 pins...
-  for (const fp of orderedFps) {
-    const fpPins = targetItems.filter(i => i.floorPlanUuid === fp.uuid)
-    fpPins.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
-    finalOrderedPins.push(...fpPins)
-  }
-
   // Any observations in the report not assigned to a drawing (list-only observations)
   const listItems = targetItems.filter(i => !i.floorPlanUuid || !orderedFpUuids.has(i.floorPlanUuid))
-  listItems.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
-  finalOrderedPins.push(...listItems)
+
+  // Combine floor plans and direct list observations based on their relative order
+  const units = [
+    ...orderedFps.map(fp => ({
+      type: 'fp',
+      uuid: fp.uuid,
+      order: fp.order !== undefined ? fp.order : 0,
+      createdAt: fp.createdAt || 0,
+      fp,
+    })),
+    ...listItems.map(it => ({
+      type: 'item',
+      uuid: it.uuid,
+      order: it.order !== undefined ? it.order : (10000 + (it.itemNumber || 0)),
+      createdAt: it.createdAt || 0,
+      item: it,
+    }))
+  ]
+
+  units.sort((a, b) => {
+    if (a.order !== undefined && b.order !== undefined && a.order !== b.order) {
+      return a.order - b.order
+    }
+    return (a.createdAt || 0) - (b.createdAt || 0)
+  })
+
+  // Organize pins in the interleaved sequence of drawings and direct observations
+  const finalOrderedPins = []
+  for (const unit of units) {
+    if (unit.type === 'fp') {
+      const fpPins = targetItems.filter(i => i.floorPlanUuid === unit.uuid)
+      fpPins.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
+      finalOrderedPins.push(...fpPins)
+    } else {
+      finalOrderedPins.push(unit.item)
+    }
+  }
 
   // Resequence sequentially: 1, 2, 3, ...
   for (let i = 0; i < finalOrderedPins.length; i++) {
@@ -712,11 +737,13 @@ export async function getNextItemNumber(projectUuid, phaseUuid = null, floorPlan
 
 // --- Photo helpers ---
 export async function getPhotos(punchItemUuid) {
-  return db.photos.where('punchItemUuid').equals(punchItemUuid).toArray()
+  const list = await db.photos.where('punchItemUuid').equals(punchItemUuid).toArray()
+  return list.sort((a, b) => (a.order !== undefined && b.order !== undefined ? a.order - b.order : (a.createdAt || 0) - (b.createdAt || 0)))
 }
 export async function getPrimaryPhotos(itemUuids) {
   if (!itemUuids || !itemUuids.length) return {}
   const allPhotos = await db.photos.where('punchItemUuid').anyOf(itemUuids).toArray()
+  allPhotos.sort((a, b) => (a.order !== undefined && b.order !== undefined ? a.order - b.order : (a.createdAt || 0) - (b.createdAt || 0)))
   const map = {}
   for (const ph of allPhotos) {
     if (!map[ph.punchItemUuid] && ph.imageData) {

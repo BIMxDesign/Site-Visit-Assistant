@@ -328,3 +328,34 @@ header button, header a, header input, header select,
     background: rgba(100, 116, 139, 0.6);
   }
 }
+
+/* ── Rich Text Observation Notes Editor ───────────────────── */
+.sitepunch-editor {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+.sitepunch-editor ul {
+  list-style-type: disc;
+  margin-left: 1.5rem;
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+.sitepunch-editor ol {
+  list-style-type: decimal;
+  margin-left: 1.5rem;
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+.sitepunch-editor li {
+  margin-bottom: 0.2rem;
+}
+.sitepunch-editor b, .sitepunch-editor strong {
+  font-weight: 700;
+}
+.sitepunch-editor i, .sitepunch-editor em {
+  font-style: italic;
+}
+.sitepunch-editor u {
+  text-decoration: underline;
+}

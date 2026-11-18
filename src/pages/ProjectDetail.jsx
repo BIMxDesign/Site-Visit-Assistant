@@ -5,7 +5,7 @@ import {
   Download, Share2, Edit2, Filter, Check, ClipboardList,
   ChevronDown, ChevronUp, MapPin, Calendar, CloudSun, Users,
   GripVertical, Layers, ListOrdered, FolderOpen, Camera, User, Home,
-  Search, X, Copy
+  Search, X, Copy, ZoomIn, ZoomOut, Maximize2
 } from 'lucide-react'
 import { v4 as uuidv4 } from 'uuid'
 import { useAppStore } from '../store/useAppStore'
@@ -124,27 +124,7 @@ export default function ProjectDetail() {
       getPunchItems(currentProjectUuid),
     ])
 
-    // Auto-clean any abandoned blank observations (created without saved notes)
-    const blankItems = rawItems.filter(i => {
-      const hasNotes = i.notes && i.notes.trim().length > 0
-      const isActivelyBeingCreated = showPunchForm && i.uuid === currentPunchItemUuid
-      return !hasNotes && !isActivelyBeingCreated
-    })
-
-    let items = rawItems
-    if (blankItems.length > 0) {
-      for (const b of blankItems) {
-        await db.photos.where('punchItemUuid').equals(b.uuid).delete()
-        await db.punchItems.where('uuid').equals(b.uuid).delete()
-      }
-      if (activePhaseObj) {
-        await resequenceReportPins(currentProjectUuid, activePhaseObj.uuid)
-      } else {
-        await resequenceReportPins({ projectUuid: currentProjectUuid })
-      }
-      items = await getPunchItems(currentProjectUuid)
-    }
-
+    const items = rawItems
     setProject(proj)
     setPhases(phaseList)
     setFloorPlans(sortFloorPlans(fps))
@@ -304,13 +284,89 @@ export default function ProjectDetail() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [previewPhotoIndex, handleNextPhoto, handlePrevPhoto])
 
-  // Mobile touch swipe gestures for lightbox
+  // Lightbox Zoom & Pan State
+  const [lightboxZoom, setLightboxZoom] = useState(1)
+  const [lightboxPan,  setLightboxPan]  = useState({ x: 0, y: 0 })
+  const lightboxDragRef = useRef(null)
+
+  useEffect(() => {
+    setLightboxZoom(1)
+    setLightboxPan({ x: 0, y: 0 })
+  }, [previewPhotoIndex])
+
+  const handleZoomInLightbox = () => {
+    setLightboxZoom(prev => Math.min(4, +(prev * 1.3).toFixed(2)))
+  }
+
+  const handleZoomOutLightbox = () => {
+    setLightboxZoom(prev => {
+      const next = Math.max(1, +(prev / 1.3).toFixed(2))
+      if (next <= 1.05) {
+        setLightboxPan({ x: 0, y: 0 })
+        return 1
+      }
+      return next
+    })
+  }
+
+  const handleResetZoomLightbox = () => {
+    setLightboxZoom(1)
+    setLightboxPan({ x: 0, y: 0 })
+  }
+
+  const handleToggleZoomLightbox = () => {
+    if (lightboxZoom > 1.1) {
+      handleResetZoomLightbox()
+    } else {
+      setLightboxZoom(2.5)
+    }
+  }
+
+  const handleWheelLightbox = (e) => {
+    e.preventDefault()
+    const delta = e.deltaY < 0 ? 1.15 : 0.85
+    setLightboxZoom(prev => {
+      const next = Math.min(4, Math.max(1, +(prev * delta).toFixed(2)))
+      if (next <= 1.05) {
+        setLightboxPan({ x: 0, y: 0 })
+        return 1
+      }
+      return next
+    })
+  }
+
+  const handlePointerDownLightbox = (e) => {
+    if (lightboxZoom <= 1) return
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
+    lightboxDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initialPan: { ...lightboxPan },
+    }
+  }
+
+  const handlePointerMoveLightbox = (e) => {
+    if (!lightboxDragRef.current || lightboxZoom <= 1) return
+    const dx = e.clientX - lightboxDragRef.current.startX
+    const dy = e.clientY - lightboxDragRef.current.startY
+    setLightboxPan({
+      x: lightboxDragRef.current.initialPan.x + dx,
+      y: lightboxDragRef.current.initialPan.y + dy,
+    })
+  }
+
+  const handlePointerUpLightbox = () => {
+    lightboxDragRef.current = null
+  }
+
+  // Mobile touch swipe gestures for lightbox (disabled when zoomed in)
   const touchStartXRef = useRef(0)
   const touchStartYRef = useRef(0)
   const touchEndXRef = useRef(0)
   const touchEndYRef = useRef(0)
 
   const handleTouchStart = (e) => {
+    if (lightboxZoom > 1) return
     if (!e.touches || e.touches.length === 0) return
     touchStartXRef.current = e.touches[0].clientX
     touchStartYRef.current = e.touches[0].clientY
@@ -319,12 +375,14 @@ export default function ProjectDetail() {
   }
 
   const handleTouchMove = (e) => {
+    if (lightboxZoom > 1) return
     if (!e.touches || e.touches.length === 0) return
     touchEndXRef.current = e.touches[0].clientX
     touchEndYRef.current = e.touches[0].clientY
   }
 
   const handleTouchEnd = () => {
+    if (lightboxZoom > 1) return
     const diffX = touchEndXRef.current - touchStartXRef.current
     const diffY = touchEndYRef.current - touchStartYRef.current
     // Minimum 35px horizontal swipe, and horizontal swipe is dominant
@@ -336,6 +394,101 @@ export default function ProjectDetail() {
       }
     }
   }
+
+  const activePhase = phases.find(p => p.uuid === currentPhaseUuid) || null
+  const activePhaseFps = activePhase
+    ? sortFloorPlans(floorPlans.filter(fp => fp.phaseUuid === activePhase.uuid || (!fp.phaseUuid && activePhase === phases[0])))
+    : []
+  const activePhaseFpUuids = useMemo(() => new Set(activePhaseFps.map(f => f.uuid)), [activePhaseFps])
+  const activePhaseItems = useMemo(() => {
+    return punchItems.filter(i => (i.phaseUuid === activePhase?.uuid) || activePhaseFpUuids.has(i.floorPlanUuid))
+  }, [punchItems, activePhase?.uuid, activePhaseFpUuids])
+  const activePhaseDirectItems = useMemo(() => {
+    return activePhaseItems.filter(i => !i.floorPlanUuid)
+  }, [activePhaseItems])
+
+  const getUnifiedItemsList = useCallback(() => {
+    const directItems = activePhaseItems.filter(i => !i.floorPlanUuid)
+    const list = [
+      ...activePhaseFps.map(fp => ({
+        type: 'floorPlan',
+        uuid: fp.uuid,
+        order: fp.order !== undefined ? fp.order : 0,
+        createdAt: fp.createdAt || 0,
+        fp,
+      })),
+      ...directItems.map(item => ({
+        type: 'observation',
+        uuid: item.uuid,
+        order: item.order !== undefined ? item.order : (10000 + (item.itemNumber || 0)),
+        createdAt: item.createdAt || 0,
+        item,
+      })),
+    ]
+
+    list.sort((a, b) => {
+      if (a.order !== undefined && b.order !== undefined && a.order !== b.order) {
+        return a.order - b.order
+      }
+      return (a.createdAt || 0) - (b.createdAt || 0)
+    })
+
+    return list
+  }, [activePhaseFps, activePhaseItems])
+
+  const query = searchQuery.trim().toLowerCase()
+
+  const matchesObservation = useCallback((item) => {
+    if (!query) return true
+    const itemNum = String(item.itemNumber || '').toLowerCase()
+    const title = (item.title || '').toLowerCase()
+    const desc = (item.description || '').toLowerCase()
+    const cat = (item.category || '').toLowerCase()
+    const room = (item.room || '').toLowerCase()
+    const status = normalizeObservationStatus(item.status).toLowerCase()
+    return itemNum.includes(query) ||
+      `#${itemNum}`.includes(query) ||
+      title.includes(query) ||
+      desc.includes(query) ||
+      cat.includes(query) ||
+      room.includes(query) ||
+      status.includes(query)
+  }, [query])
+
+  const matchesFloorPlan = useCallback((fp) => {
+    if (!query) return true
+    if ((fp.name || '').toLowerCase().includes(query)) return true
+    const fpItems = punchItems.filter(i => i.floorPlanUuid === fp.uuid)
+    return fpItems.some(matchesObservation)
+  }, [query, punchItems, matchesObservation])
+
+  const unifiedItems = useMemo(() => getUnifiedItemsList(), [getUnifiedItemsList])
+
+  const displayedUnifiedItems = useMemo(() => {
+    if (!query) return unifiedItems
+    return unifiedItems.filter(entry => {
+      if (entry.type === 'floorPlan') {
+        const fp = entry.fp
+        if ((fp.name || '').toLowerCase().includes(query)) return true
+        const fpItems = punchItems.filter(i => i.floorPlanUuid === fp.uuid)
+        return fpItems.some(matchesObservation)
+      } else {
+        return matchesObservation(entry.item)
+      }
+    })
+  }, [unifiedItems, query, punchItems, matchesObservation])
+
+  // Memoized map of primary photo for each punch item
+  const primaryPhotosMap = useMemo(() => {
+    const map = {}
+    const sorted = [...galleryPhotos].sort((a, b) => (a.order !== undefined && b.order !== undefined ? a.order - b.order : (a.createdAt || 0) - (b.createdAt || 0)))
+    for (const ph of sorted) {
+      if (ph.punchItemUuid && !map[ph.punchItemUuid] && (ph.imageData || ph.dataUrl)) {
+        map[ph.punchItemUuid] = ph.imageData || ph.dataUrl
+      }
+    }
+    return map
+  }, [galleryPhotos])
 
   const handleMoveFloorPlan = async (fpUuid, direction) => {
     const list = [...activePhaseFps]
@@ -353,350 +506,167 @@ export default function ProjectDetail() {
     await load()
   }
 
-  // ── Drag & Drop Reordering (Mouse and Touch / Finger) ──
-  const [draggedFpUuid, setDraggedFpUuid] = useState(null)
-  const [dragOverFpUuid, setDragOverFpUuid] = useState(null)
-  const dragRef = useRef(null)
+  // ── Unified Drag & Drop Reordering (Key Plans & Direct Observations interleaved) ──
+  const [draggedUnifiedUuid, setDraggedUnifiedUuid] = useState(null)
+  const [dragOverUnifiedUuid, setDragOverUnifiedUuid] = useState(null)
+  const dragUnifiedRef = useRef(null)
 
-  const reorderList = async (sourceUuid, targetUuid) => {
+  const reorderUnifiedList = async (sourceUuid, targetUuid) => {
     if (!sourceUuid || !targetUuid || sourceUuid === targetUuid) return
-    const list = [...activePhaseFps]
-    const fromIdx = list.findIndex(f => f.uuid === sourceUuid)
-    const toIdx = list.findIndex(f => f.uuid === targetUuid)
+    const list = getUnifiedItemsList()
+    const fromIdx = list.findIndex(u => u.uuid === sourceUuid)
+    const toIdx = list.findIndex(u => u.uuid === targetUuid)
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
 
-    if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-      const [movedItem] = list.splice(fromIdx, 1)
-      list.splice(toIdx, 0, movedItem)
-
-      await reorderFloorPlans(list.map(f => f.uuid), currentProjectUuid, activePhase?.uuid)
-      await load()
-    }
-  }
-
-  // HTML5 Drag (Desktop Mouse)
-  const handleDragStart = (e, fpUuid) => {
-    e.dataTransfer.setData('text/plain', fpUuid)
-    e.dataTransfer.effectAllowed = 'move'
-    setDraggedFpUuid(fpUuid)
-  }
-
-  const handleDragOver = (e, fpUuid) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (dragOverFpUuid !== fpUuid) {
-      setDragOverFpUuid(fpUuid)
-    }
-  }
-
-  const handleDrop = async (e, targetUuid) => {
-    e.preventDefault()
-    const itemType = e.dataTransfer.getData('sitepunch/type')
-    const sourceUuid = e.dataTransfer.getData('text/plain') || draggedFpUuid || draggedObsUuid
-    setDraggedFpUuid(null)
-    setDragOverFpUuid(null)
-
-    // If an observation was dropped onto a key plan, attach it to that key plan
-    if (itemType === 'punch-item' || (draggedObsUuid && sourceUuid === draggedObsUuid)) {
-      setDraggedObsUuid(null)
-      setDragOverObsUuid(null)
-      await db.punchItems.where('uuid').equals(sourceUuid).modify({
-        floorPlanUuid: targetUuid,
-        updatedAt: Date.now()
-      })
-      await resequenceReportPins({ projectUuid: currentProjectUuid, phaseUuid: activePhase?.uuid, floorPlanUuid: targetUuid })
-      await load()
-      return
-    }
-
-    await reorderList(sourceUuid, targetUuid)
-  }
-
-  const handleDragEnd = () => {
-    setDraggedFpUuid(null)
-    setDragOverFpUuid(null)
-  }
-
-  // Pointer & Touch Events (Finger & Mouse Grip)
-  const handleGripPointerDown = (e, fpUuid, index) => {
-    if (e.button !== undefined && e.button !== 0) return
-    try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
-
-    dragRef.current = {
-      pointerId: e.pointerId,
-      uuid: fpUuid,
-      startIndex: index,
-      startY: e.clientY,
-      hasMoved: false,
-    }
-  }
-
-  const handleGripPointerMove = (e) => {
-    if (!dragRef.current) return
-    const dy = Math.abs(e.clientY - dragRef.current.startY)
-    if (!dragRef.current.hasMoved && dy > 4) {
-      dragRef.current.hasMoved = true
-      setDraggedFpUuid(dragRef.current.uuid)
-    }
-    if (!dragRef.current.hasMoved) return
-
-    const elem = document.elementFromPoint(e.clientX, e.clientY)
-    const card = elem?.closest('[data-fp-uuid]')
-    if (card) {
-      const targetUuid = card.getAttribute('data-fp-uuid')
-      if (targetUuid && targetUuid !== dragRef.current.uuid) {
-        setDragOverFpUuid(targetUuid)
-      }
-    }
-  }
-
-  const handleGripPointerUp = async () => {
-    if (!dragRef.current) return
-    const { uuid, hasMoved } = dragRef.current
-    const targetUuid = dragOverFpUuid
-
-    setDraggedFpUuid(null)
-    setDragOverFpUuid(null)
-    dragRef.current = null
-
-    if (hasMoved && targetUuid && targetUuid !== uuid) {
-      await reorderList(uuid, targetUuid)
-    }
-  }
-
-  // Touch Events (mobile/finger specific fallback)
-  const handleGripTouchStart = (e, fpUuid, index) => {
-    const touch = e.touches[0]
-    dragRef.current = {
-      uuid: fpUuid,
-      startIndex: index,
-      startY: touch.clientY,
-      hasMoved: false,
-    }
-  }
-
-  const handleGripTouchMove = (e) => {
-    if (!dragRef.current) return
-    const touch = e.touches[0]
-    const dy = Math.abs(touch.clientY - dragRef.current.startY)
-    if (!dragRef.current.hasMoved && dy > 4) {
-      dragRef.current.hasMoved = true
-      setDraggedFpUuid(dragRef.current.uuid)
-    }
-    if (!dragRef.current.hasMoved) return
-
-    if (e.cancelable) e.preventDefault()
-
-    const elem = document.elementFromPoint(touch.clientX, touch.clientY)
-    const card = elem?.closest('[data-fp-uuid]')
-    if (card) {
-      const targetUuid = card.getAttribute('data-fp-uuid')
-      if (targetUuid && targetUuid !== dragRef.current.uuid) {
-        setDragOverFpUuid(targetUuid)
-      }
-    }
-  }
-
-  const handleGripTouchEnd = async () => {
-    if (!dragRef.current) return
-    const { uuid, hasMoved } = dragRef.current
-    const targetUuid = dragOverFpUuid
-
-    setDraggedFpUuid(null)
-    setDragOverFpUuid(null)
-    dragRef.current = null
-
-    if (hasMoved && targetUuid && targetUuid !== uuid) {
-      await reorderList(uuid, targetUuid)
-    }
-  }
-
-  // ── Direct Observations Drag & Drop / Reordering ──
-  const [draggedObsUuid, setDraggedObsUuid] = useState(null)
-  const [dragOverObsUuid, setDragOverObsUuid] = useState(null)
-  const dragObsRef = useRef(null)
-
-  const reorderDirectObservations = async (sourceUuid, targetUuid) => {
-    if (!sourceUuid || !targetUuid || sourceUuid === targetUuid) return
-    const currentDirect = activePhaseItems
-      .filter(i => !i.floorPlanUuid)
-      .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
-
-    const list = [...currentDirect]
-    const fromIdx = list.findIndex(i => i.uuid === sourceUuid)
-    const toIdx = list.findIndex(i => i.uuid === targetUuid)
-
-    if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-      const [movedItem] = list.splice(fromIdx, 1)
-      list.splice(toIdx, 0, movedItem)
-
-      // Start numbering directly after all floor plan pins in this report
-      const floorPlanPinsCount = activePhaseItems.filter(i => !!i.floorPlanUuid).length
-      const baseSeq = floorPlanPinsCount + 1
-
-      for (let i = 0; i < list.length; i++) {
-        const item = list[i]
-        const newNumber = baseSeq + i
-        if (item.itemNumber !== newNumber) {
-          await db.punchItems.where('uuid').equals(item.uuid).modify({
-            itemNumber: newNumber,
-            updatedAt: Date.now()
-          })
-        }
-      }
-      await load()
-    }
-  }
-
-  const handleMoveDirectObservation = async (itemUuid, direction) => {
-    const currentDirect = activePhaseItems
-      .filter(i => !i.floorPlanUuid)
-      .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
-
-    const list = [...currentDirect]
-    const idx = list.findIndex(i => i.uuid === itemUuid)
-    if (idx === -1) return
-    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
-    if (targetIdx < 0 || targetIdx >= list.length) return
-
-    const [moved] = list.splice(idx, 1)
-    list.splice(targetIdx, 0, moved)
-
-    const floorPlanPinsCount = activePhaseItems.filter(i => !!i.floorPlanUuid).length
-    const baseSeq = floorPlanPinsCount + 1
+    const [moved] = list.splice(fromIdx, 1)
+    list.splice(toIdx, 0, moved)
 
     for (let i = 0; i < list.length; i++) {
-      const item = list[i]
-      const newNumber = baseSeq + i
-      if (item.itemNumber !== newNumber) {
-        await db.punchItems.where('uuid').equals(item.uuid).modify({
-          itemNumber: newNumber,
+      const entry = list[i]
+      if (entry.type === 'floorPlan') {
+        await db.floorPlans.where('uuid').equals(entry.uuid).modify({
+          order: i,
+          updatedAt: Date.now()
+        })
+      } else {
+        await db.punchItems.where('uuid').equals(entry.uuid).modify({
+          order: i,
           updatedAt: Date.now()
         })
       }
     }
+
+    await resequenceReportPins({ projectUuid: currentProjectUuid, phaseUuid: activePhase?.uuid })
     await load()
   }
 
-  // Desktop Mouse Drag for Observations
-  const handleObsDragStart = (e, itemUuid) => {
-    e.dataTransfer.setData('text/plain', itemUuid)
-    e.dataTransfer.setData('sitepunch/type', 'punch-item')
-    e.dataTransfer.effectAllowed = 'move'
-    setDraggedObsUuid(itemUuid)
+  const handleMoveUnified = async (uuid, direction) => {
+    const list = getUnifiedItemsList()
+    const idx = list.findIndex(u => u.uuid === uuid)
+    if (idx === -1) return
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= list.length) return
+    const targetUuid = list[targetIdx].uuid
+    await reorderUnifiedList(uuid, targetUuid)
   }
 
-  const handleObsDragOver = (e, itemUuid) => {
+  // HTML5 Drag (Desktop Mouse)
+  const handleUnifiedDragStart = (e, uuid) => {
+    e.dataTransfer.setData('text/plain', uuid)
+    e.dataTransfer.effectAllowed = 'move'
+    setDraggedUnifiedUuid(uuid)
+  }
+
+  const handleUnifiedDragOver = (e, uuid) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    if (dragOverObsUuid !== itemUuid) {
-      setDragOverObsUuid(itemUuid)
+    if (dragOverUnifiedUuid !== uuid) {
+      setDragOverUnifiedUuid(uuid)
     }
   }
 
-  const handleObsDrop = async (e, targetUuid) => {
+  const handleUnifiedDrop = async (e, targetUuid) => {
     e.preventDefault()
-    const sourceUuid = e.dataTransfer.getData('text/plain') || draggedObsUuid
-    setDraggedObsUuid(null)
-    setDragOverObsUuid(null)
-    await reorderDirectObservations(sourceUuid, targetUuid)
+    const sourceUuid = e.dataTransfer.getData('text/plain') || draggedUnifiedUuid
+    setDraggedUnifiedUuid(null)
+    setDragOverUnifiedUuid(null)
+    if (sourceUuid && targetUuid && sourceUuid !== targetUuid) {
+      await reorderUnifiedList(sourceUuid, targetUuid)
+    }
   }
 
-  const handleObsDragEnd = () => {
-    setDraggedObsUuid(null)
-    setDragOverObsUuid(null)
+  const handleUnifiedDragEnd = () => {
+    setDraggedUnifiedUuid(null)
+    setDragOverUnifiedUuid(null)
   }
 
-  // Pointer & Touch Events (Finger & Mouse Grip) for Observations
-  const handleObsGripPointerDown = (e, itemUuid, index) => {
+  // Pointer & Touch Events (Finger & Mouse Grip) for Unified Items
+  const handleUnifiedGripPointerDown = (e, uuid, index) => {
     if (e.button !== undefined && e.button !== 0) return
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
-
-    dragObsRef.current = {
+    dragUnifiedRef.current = {
       pointerId: e.pointerId,
-      uuid: itemUuid,
+      uuid,
       startIndex: index,
       startY: e.clientY,
       hasMoved: false,
     }
   }
 
-  const handleObsGripPointerMove = (e) => {
-    if (!dragObsRef.current) return
-    const dy = Math.abs(e.clientY - dragObsRef.current.startY)
-    if (!dragObsRef.current.hasMoved && dy > 4) {
-      dragObsRef.current.hasMoved = true
-      setDraggedObsUuid(dragObsRef.current.uuid)
+  const handleUnifiedGripPointerMove = (e) => {
+    if (!dragUnifiedRef.current) return
+    const dy = Math.abs(e.clientY - dragUnifiedRef.current.startY)
+    if (!dragUnifiedRef.current.hasMoved && dy > 4) {
+      dragUnifiedRef.current.hasMoved = true
+      setDraggedUnifiedUuid(dragUnifiedRef.current.uuid)
     }
-    if (!dragObsRef.current.hasMoved) return
+    if (!dragUnifiedRef.current.hasMoved) return
 
     const elem = document.elementFromPoint(e.clientX, e.clientY)
-    const card = elem?.closest('[data-item-uuid]')
+    const card = elem?.closest('[data-unified-uuid], [data-fp-uuid], [data-item-uuid]')
     if (card) {
-      const targetUuid = card.getAttribute('data-item-uuid')
-      if (targetUuid && targetUuid !== dragObsRef.current.uuid) {
-        setDragOverObsUuid(targetUuid)
+      const targetUuid = card.getAttribute('data-unified-uuid') || card.getAttribute('data-fp-uuid') || card.getAttribute('data-item-uuid')
+      if (targetUuid && targetUuid !== dragUnifiedRef.current.uuid) {
+        setDragOverUnifiedUuid(targetUuid)
       }
     }
   }
 
-  const handleObsGripPointerUp = async () => {
-    if (!dragObsRef.current) return
-    const { uuid, hasMoved } = dragObsRef.current
-    const targetUuid = dragOverObsUuid
-
-    setDraggedObsUuid(null)
-    setDragOverObsUuid(null)
-    dragObsRef.current = null
+  const handleUnifiedGripPointerUp = async () => {
+    if (!dragUnifiedRef.current) return
+    const { uuid, hasMoved } = dragUnifiedRef.current
+    const targetUuid = dragOverUnifiedUuid
+    setDraggedUnifiedUuid(null)
+    setDragOverUnifiedUuid(null)
+    dragUnifiedRef.current = null
 
     if (hasMoved && targetUuid && targetUuid !== uuid) {
-      await reorderDirectObservations(uuid, targetUuid)
+      await reorderUnifiedList(uuid, targetUuid)
     }
   }
 
-  // Touch Events (mobile/finger fallback) for Observations
-  const handleObsGripTouchStart = (e, itemUuid, index) => {
+  // Touch Events (mobile/finger fallback)
+  const handleUnifiedGripTouchStart = (e, uuid, index) => {
     const touch = e.touches[0]
-    dragObsRef.current = {
-      uuid: itemUuid,
+    dragUnifiedRef.current = {
+      uuid,
       startIndex: index,
       startY: touch.clientY,
       hasMoved: false,
     }
   }
 
-  const handleObsGripTouchMove = (e) => {
-    if (!dragObsRef.current) return
+  const handleUnifiedGripTouchMove = (e) => {
+    if (!dragUnifiedRef.current) return
     const touch = e.touches[0]
-    const dy = Math.abs(touch.clientY - dragObsRef.current.startY)
-    if (!dragObsRef.current.hasMoved && dy > 4) {
-      dragObsRef.current.hasMoved = true
-      setDraggedObsUuid(dragObsRef.current.uuid)
+    const dy = Math.abs(touch.clientY - dragUnifiedRef.current.startY)
+    if (!dragUnifiedRef.current.hasMoved && dy > 4) {
+      dragUnifiedRef.current.hasMoved = true
+      setDraggedUnifiedUuid(dragUnifiedRef.current.uuid)
     }
-    if (!dragObsRef.current.hasMoved) return
-
+    if (!dragUnifiedRef.current.hasMoved) return
     if (e.cancelable) e.preventDefault()
 
     const elem = document.elementFromPoint(touch.clientX, touch.clientY)
-    const card = elem?.closest('[data-item-uuid]')
+    const card = elem?.closest('[data-unified-uuid], [data-fp-uuid], [data-item-uuid]')
     if (card) {
-      const targetUuid = card.getAttribute('data-item-uuid')
-      if (targetUuid && targetUuid !== dragObsRef.current.uuid) {
-        setDragOverObsUuid(targetUuid)
+      const targetUuid = card.getAttribute('data-unified-uuid') || card.getAttribute('data-fp-uuid') || card.getAttribute('data-item-uuid')
+      if (targetUuid && targetUuid !== dragUnifiedRef.current.uuid) {
+        setDragOverUnifiedUuid(targetUuid)
       }
     }
   }
 
-  const handleObsGripTouchEnd = async () => {
-    if (!dragObsRef.current) return
-    const { uuid, hasMoved } = dragObsRef.current
-    const targetUuid = dragOverObsUuid
-
-    setDraggedObsUuid(null)
-    setDragOverObsUuid(null)
-    dragObsRef.current = null
+  const handleUnifiedGripTouchEnd = async () => {
+    if (!dragUnifiedRef.current) return
+    const { uuid, hasMoved } = dragUnifiedRef.current
+    const targetUuid = dragOverUnifiedUuid
+    setDraggedUnifiedUuid(null)
+    setDragOverUnifiedUuid(null)
+    dragUnifiedRef.current = null
 
     if (hasMoved && targetUuid && targetUuid !== uuid) {
-      await reorderDirectObservations(uuid, targetUuid)
+      await reorderUnifiedList(uuid, targetUuid)
     }
   }
 
@@ -730,9 +700,9 @@ export default function ProjectDetail() {
       updatedAt: new Date().toISOString(),
     }
     await savePunchItem(newItem)
-    await load()
     setCurrentPunchItem(newUuid)
     openPunchForm()
+    await load()
   }
 
   const handleDeletePunchItem = async (uuid) => {
@@ -877,43 +847,8 @@ export default function ProjectDetail() {
   if (loading) return <LoadingScreen />
   if (!project) return null
 
-  const activePhase = phases.find(p => p.uuid === currentPhaseUuid) || null
-  const activePhaseFps = activePhase
-    ? sortFloorPlans(floorPlans.filter(fp => fp.phaseUuid === activePhase.uuid || (!fp.phaseUuid && activePhase === phases[0])))
-    : []
-  const activePhaseFpUuids = new Set(activePhaseFps.map(f => f.uuid))
-  const activePhaseItems = punchItems.filter(i => (i.phaseUuid === activePhase?.uuid) || activePhaseFpUuids.has(i.floorPlanUuid))
-
   const displayedItems = activePhase ? activePhaseItems : punchItems
-
-  const query = searchQuery.trim().toLowerCase()
-
-  const matchesObservation = (item) => {
-    if (!query) return true
-    const itemNum = String(item.itemNumber || '').toLowerCase()
-    const title = (item.title || '').toLowerCase()
-    const desc = (item.description || '').toLowerCase()
-    const cat = (item.category || '').toLowerCase()
-    const room = (item.room || '').toLowerCase()
-    const status = normalizeObservationStatus(item.status).toLowerCase()
-    return itemNum.includes(query) ||
-      `#${itemNum}`.includes(query) ||
-      title.includes(query) ||
-      desc.includes(query) ||
-      cat.includes(query) ||
-      room.includes(query) ||
-      status.includes(query)
-  }
-
-  const matchesFloorPlan = (fp) => {
-    if (!query) return true
-    if ((fp.name || '').toLowerCase().includes(query)) return true
-    const fpItems = punchItems.filter(i => i.floorPlanUuid === fp.uuid)
-    return fpItems.some(matchesObservation)
-  }
-
   const displayedActivePhaseFps = activePhaseFps.filter(matchesFloorPlan)
-
   const displayedDirectItems = activePhaseItems
     .filter(i => !i.floorPlanUuid)
     .filter(matchesObservation)
@@ -1279,7 +1214,7 @@ export default function ProjectDetail() {
                     </div>
                   </div>
 
-                  {/* Action buttons (Edit & Duplicate) placed outside attendees section on the right side */}
+                  {/* Action button (Edit) placed outside attendees section on the right side */}
                   <div className="flex sm:flex-col items-center gap-1.5 flex-shrink-0 sm:self-stretch">
                     <button
                       type="button"
@@ -1289,15 +1224,6 @@ export default function ProjectDetail() {
                     >
                       <Edit2 size={14} className="group-hover:scale-110 transition-transform" />
                       <span className="text-[11px] font-bold">Edit</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDuplicatePhase(activePhase)}
-                      className="liquid-pill px-3 py-2 sm:py-0 text-slate-700 hover:text-purple-700 rounded-xl transition-all flex sm:flex-col items-center justify-center gap-1 flex-1 sm:self-stretch sm:min-w-[64px] cursor-pointer group shadow-2xs"
-                      title="Duplicate Site Visit"
-                    >
-                      <Copy size={14} className="group-hover:scale-110 transition-transform text-purple-600" />
-                      <span className="text-[11px] font-bold">Duplicate</span>
                     </button>
                   </div>
                 </div>
@@ -1313,8 +1239,8 @@ export default function ProjectDetail() {
                 ]}
               />
 
-              {/* Report Content: Key Plans & Direct Observations (Key Plan Image is Optional) */}
-              {activePhaseFps.length === 0 ? (
+              {/* Report Content: Unified Key Plans & Direct Observations (Drag & drop anywhere between them) */}
+              {activePhaseFps.length === 0 && activePhaseDirectItems.length === 0 ? (
                 <div className="space-y-4">
                   <div className="p-8 text-center border-2 border-dashed border-gray-200 rounded-2xl bg-white shadow-xs">
                     <div className="w-12 h-12 rounded-2xl bg-brand-50 text-brand-700 flex items-center justify-center mx-auto mb-3">
@@ -1339,254 +1265,136 @@ export default function ProjectDetail() {
                         style={{ background: 'var(--brand-button, #a40e26)' }}
                       >
                         <Plus size={15} />
-                        <span>Add Observation (List Item)</span>
+                        <span>Add Observation</span>
                       </button>
                     </div>
                   </div>
-
-                  {activePhaseItems.length > 0 && (
-                    <div className="space-y-2 pt-2">
-                      <div className="flex items-center justify-between pb-1 gap-2">
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
-                            Observations in this Site Visit
-                          </h4>
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-brand-50 text-brand-700 border border-brand-200/80">
-                            {query ? activePhaseItems.filter(matchesObservation).length : activePhaseItems.length}
-                          </span>
-                        </div>
-                        <button
-                          onClick={handleAddNewObservationForPhase}
-                          className="sitepunch-btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
-                          style={{ background: 'var(--brand-button, #a40e26)' }}
-                        >
-                          <Plus size={13} />
-                          <span>Add Observation</span>
-                        </button>
-                      </div>
-                      {activePhaseItems
-                        .filter(matchesObservation)
-                        .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
-                        .map(item => (
-                          <PunchItemRow
-                            key={item.uuid}
-                            item={item}
-                            floorPlan={null}
-                            phase={activePhase}
-                            showPhase={false}
-                            onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
-                            onClick={() => {
-                              setCurrentPunchItem(item.uuid)
-                              openPunchForm()
-                            }}
-                            onEdit={() => {
-                              setCurrentPunchItem(item.uuid)
-                              openPunchForm()
-                            }}
-                            onDelete={() => handleDeletePunchItem(item.uuid)}
-                          />
-                        ))}
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="space-y-4">
                   <div className="space-y-2.5">
-                    <div className="flex items-center justify-between pb-1 gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                          className="w-8 h-8 rounded-xl flex items-center justify-center shadow-2xs flex-shrink-0 border"
-                          style={{
-                            color: 'var(--punch-pin-color, #a40e26)',
-                            borderColor: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.35)',
-                            background: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1)',
-                          }}
-                        >
-                          <FileImage size={17} className="stroke-[2.2]" />
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
-                            Key Plans
-                          </h3>
-                          <span
-                            className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border"
-                            style={{
-                              color: 'var(--punch-pin-color, #a40e26)',
-                              borderColor: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.35)',
-                              background: 'rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1)',
-                            }}
-                          >
-                            {query ? displayedActivePhaseFps.length : activePhaseFps.length}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <button
-                          onClick={() => handleOpenAddFloorPlan(activePhase.uuid)}
-                          className="sitepunch-btn-primary inline-flex items-center gap-1.5 text-xs font-bold bg-brand-700 hover:bg-brand-800 text-white px-3 py-1.5 rounded-xl transition-colors cursor-pointer shadow-xs"
-                          style={{ background: 'var(--brand-button, #a40e26)' }}
-                          title="Add Key Plan"
-                        >
-                          <Plus size={14} />
-                          <span>Add Key Plan</span>
-                        </button>
-                      </div>
-                    </div>
-                    {displayedActivePhaseFps.map((fp, idx) => {
-                      const fpPunchItems = punchItems
-                        .filter(i => i.floorPlanUuid === fp.uuid)
-                        .filter(matchesObservation)
-                        .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
-                      const isExpanded = query ? true : expandedFpUuids.has(fp.uuid)
+                    {displayedUnifiedItems.map((entry, idx) => {
+                      if (entry.type === 'floorPlan') {
+                        const fp = entry.fp
+                        const fpPunchItems = punchItems
+                          .filter(i => i.floorPlanUuid === fp.uuid)
+                          .filter(matchesObservation)
+                          .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
+                        const isExpanded = query ? true : expandedFpUuids.has(fp.uuid)
+                        const fpIndex = activePhaseFps.findIndex(f => f.uuid === fp.uuid) + 1
 
-                      return (
-                        <div key={fp.uuid} className="space-y-2">
-                          <FloorPlanCard
-                            fp={fp}
-                            index={idx + 1}
-                            punchItems={fpPunchItems}
-                            isExpanded={isExpanded}
-                            onToggleAccordion={() => toggleFpAccordion(fp.uuid)}
-                            onClick={() => navigateToFloorPlan(currentProjectUuid, fp.uuid, fp.phaseUuid || activePhase?.uuid)}
-                            onRename={() => setRenamingFp(fp)}
-                            onDelete={handleDeleteFloorPlan}
-                            onMoveUp={() => handleMoveFloorPlan(fp.uuid, 'up')}
-                            onMoveDown={() => handleMoveFloorPlan(fp.uuid, 'down')}
-                            canMoveUp={idx > 0}
-                            canMoveDown={idx < activePhaseFps.length - 1}
-                            isDragging={draggedFpUuid === fp.uuid}
-                            isDragOver={dragOverFpUuid === fp.uuid}
-                            onDragStart={handleDragStart}
-                            onDragOver={handleDragOver}
-                            onDrop={handleDrop}
-                            onPointerDownGrip={(e) => handleGripPointerDown(e, fp.uuid, idx)}
-                            onPointerMoveGrip={handleGripPointerMove}
-                            onPointerUpGrip={handleGripPointerUp}
-                            onTouchStartGrip={(e) => handleGripTouchStart(e, fp.uuid, idx)}
-                            onTouchMoveGrip={handleGripTouchMove}
-                            onTouchEndGrip={handleGripTouchEnd}
-                          />
+                        return (
+                          <div key={fp.uuid} className="space-y-2" data-unified-uuid={fp.uuid}>
+                            <FloorPlanCard
+                              fp={fp}
+                              index={fpIndex}
+                              punchItems={fpPunchItems}
+                              isExpanded={isExpanded}
+                              onToggleAccordion={() => toggleFpAccordion(fp.uuid)}
+                              onClick={() => navigateToFloorPlan(currentProjectUuid, fp.uuid, fp.phaseUuid || activePhase?.uuid)}
+                              onRename={() => setRenamingFp(fp)}
+                              onDelete={handleDeleteFloorPlan}
+                              onMoveUp={() => handleMoveUnified(fp.uuid, 'up')}
+                              onMoveDown={() => handleMoveUnified(fp.uuid, 'down')}
+                              canMoveUp={idx > 0}
+                              canMoveDown={idx < displayedUnifiedItems.length - 1}
+                              isDragging={draggedUnifiedUuid === fp.uuid}
+                              isDragOver={dragOverUnifiedUuid === fp.uuid}
+                              onDragStart={handleUnifiedDragStart}
+                              onDragOver={handleUnifiedDragOver}
+                              onDrop={handleUnifiedDrop}
+                              onDragEnd={handleUnifiedDragEnd}
+                              onPointerDownGrip={(e) => handleUnifiedGripPointerDown(e, fp.uuid, idx)}
+                              onPointerMoveGrip={handleUnifiedGripPointerMove}
+                              onPointerUpGrip={handleUnifiedGripPointerUp}
+                              onTouchStartGrip={(e) => handleUnifiedGripTouchStart(e, fp.uuid, idx)}
+                              onTouchMoveGrip={handleUnifiedGripTouchMove}
+                              onTouchEndGrip={handleUnifiedGripTouchEnd}
+                            />
 
-                          {/* Collapsible Accordion: Observations pinned on this Key Plan */}
-                          {isExpanded && (
-                            <div
-                              className="pl-3 sm:pl-7 pr-1 space-y-2 animate-fade-in border-l-2 ml-4 sm:ml-6 my-2"
-                              style={{ borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.45)` }}
-                            >
-                              {fpPunchItems.length === 0 ? (
-                                <div className="p-3 bg-white/70 rounded-xl border border-gray-200 text-center text-xs text-gray-500">
-                                  No observations pinned on this key plan yet.
-                                </div>
-                              ) : (
-                                fpPunchItems.map(item => (
-                                  <PunchItemRow
-                                    key={item.uuid}
-                                    item={item}
-                                    floorPlan={fp}
-                                    phase={activePhase}
-                                    showPhase={false}
-                                    onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
-                                    onClick={() => {
-                                      setCurrentPunchItem(item.uuid)
-                                      openPunchForm()
-                                    }}
-                                    onEdit={() => {
-                                      setCurrentPunchItem(item.uuid)
-                                      openPunchForm()
-                                    }}
-                                    onDelete={() => handleDeletePunchItem(item.uuid)}
-                                  />
-                                ))
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )
+                            {/* Collapsible Accordion: Observations pinned on this Key Plan */}
+                            {isExpanded && (
+                              <div
+                                className="pl-3 sm:pl-7 pr-1 space-y-2 animate-fade-in border-l-2 ml-4 sm:ml-6 my-2"
+                                style={{ borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.45)` }}
+                              >
+                                {fpPunchItems.length === 0 ? (
+                                  <div className="p-3 bg-white/70 rounded-xl border border-gray-200 text-center text-xs text-gray-500">
+                                    No observations pinned on this key plan yet.
+                                  </div>
+                                ) : (
+                                  fpPunchItems.map(item => (
+                                    <PunchItemRow
+                                      key={item.uuid}
+                                      item={item}
+                                      floorPlan={fp}
+                                      phase={activePhase}
+                                      photo={primaryPhotosMap[item.uuid]}
+                                      showPhase={false}
+                                      onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
+                                      onClick={() => {
+                                        setCurrentPunchItem(item.uuid)
+                                        openPunchForm()
+                                      }}
+                                      onEdit={() => {
+                                        setCurrentPunchItem(item.uuid)
+                                        openPunchForm()
+                                      }}
+                                      onDelete={() => handleDeletePunchItem(item.uuid)}
+                                    />
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      } else {
+                        // Direct list observation
+                        const item = entry.item
+                        return (
+                          <div key={item.uuid} data-unified-uuid={item.uuid}>
+                            <PunchItemRow
+                              item={item}
+                              floorPlan={null}
+                              phase={activePhase}
+                              photo={primaryPhotosMap[item.uuid]}
+                              showPhase={false}
+                              onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
+                              onClick={() => {
+                                setCurrentPunchItem(item.uuid)
+                                openPunchForm()
+                              }}
+                              onEdit={() => {
+                                setCurrentPunchItem(item.uuid)
+                                openPunchForm()
+                              }}
+                              onDelete={() => handleDeletePunchItem(item.uuid)}
+                              draggable={true}
+                              isDragging={draggedUnifiedUuid === item.uuid}
+                              isDragOver={dragOverUnifiedUuid === item.uuid}
+                              onMoveUp={() => handleMoveUnified(item.uuid, 'up')}
+                              onMoveDown={() => handleMoveUnified(item.uuid, 'down')}
+                              canMoveUp={idx > 0}
+                              canMoveDown={idx < displayedUnifiedItems.length - 1}
+                              onDragStart={handleUnifiedDragStart}
+                              onDragOver={handleUnifiedDragOver}
+                              onDrop={handleUnifiedDrop}
+                              onDragEnd={handleUnifiedDragEnd}
+                              onPointerDownGrip={(e) => handleUnifiedGripPointerDown(e, item.uuid, idx)}
+                              onPointerMoveGrip={handleUnifiedGripPointerMove}
+                              onPointerUpGrip={handleUnifiedGripPointerUp}
+                              onTouchStartGrip={(e) => handleUnifiedGripTouchStart(e, item.uuid, idx)}
+                              onTouchMoveGrip={handleUnifiedGripTouchMove}
+                              onTouchEndGrip={handleUnifiedGripTouchEnd}
+                            />
+                          </div>
+                        )
+                      }
                     })}
                   </div>
 
-                  {/* Any direct list observations in this report */}
-                  {(query ? displayedDirectItems.length > 0 : activePhaseItems.some(i => !i.floorPlanUuid)) && (
-                    <div className="space-y-2 pt-2 border-t border-gray-150">
-                      <div className="flex items-center justify-between pb-1 gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div
-                            className="w-8 h-8 rounded-xl flex items-center justify-center shadow-2xs flex-shrink-0 border"
-                            style={{
-                              color: pinColor || 'var(--punch-pin-color, #a40e26)',
-                              borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.35)`,
-                              background: `rgba(${pinR}, ${pinG}, ${pinB}, 0.1)`,
-                            }}
-                          >
-                            <ClipboardList size={17} className="stroke-[2.2]" />
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">
-                              Direct List Observations
-                            </h4>
-                            <span
-                              className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border"
-                              style={{
-                                color: pinColor || 'var(--punch-pin-color, #a40e26)',
-                                borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.35)`,
-                                background: `rgba(${pinR}, ${pinG}, ${pinB}, 0.1)`,
-                              }}
-                            >
-                              {displayedDirectItems.length}
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          onClick={handleAddNewObservationForPhase}
-                          className="sitepunch-btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-700 hover:bg-brand-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
-                          style={{ background: 'var(--brand-button, #a40e26)' }}
-                        >
-                          <Plus size={13} />
-                          <span>Add Observation</span>
-                        </button>
-                      </div>
-                      {displayedDirectItems
-                        .map((item, idx, arr) => (
-                          <PunchItemRow
-                            key={item.uuid}
-                            item={item}
-                            floorPlan={null}
-                            phase={activePhase}
-                            showPhase={false}
-                            onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
-                            onClick={() => {
-                              setCurrentPunchItem(item.uuid)
-                              openPunchForm()
-                            }}
-                            onEdit={() => {
-                              setCurrentPunchItem(item.uuid)
-                              openPunchForm()
-                            }}
-                            onDelete={() => handleDeletePunchItem(item.uuid)}
-                            draggable={true}
-                            isDragging={draggedObsUuid === item.uuid}
-                            isDragOver={dragOverObsUuid === item.uuid}
-                            onMoveUp={() => handleMoveDirectObservation(item.uuid, 'up')}
-                            onMoveDown={() => handleMoveDirectObservation(item.uuid, 'down')}
-                            canMoveUp={idx > 0}
-                            canMoveDown={idx < arr.length - 1}
-                            onDragStart={handleObsDragStart}
-                            onDragOver={handleObsDragOver}
-                            onDrop={handleObsDrop}
-                            onDragEnd={handleObsDragEnd}
-                            onPointerDownGrip={(e) => handleObsGripPointerDown(e, item.uuid, idx)}
-                            onPointerMoveGrip={handleObsGripPointerMove}
-                            onPointerUpGrip={handleObsGripPointerUp}
-                            onTouchStartGrip={(e) => handleObsGripTouchStart(e, item.uuid, idx)}
-                            onTouchMoveGrip={handleObsGripTouchMove}
-                            onTouchEndGrip={handleObsGripTouchEnd}
-                          />
-                        ))}
-                    </div>
-                  )}
-
                   {/* Empty Search Results Message */}
-                  {query && displayedActivePhaseFps.length === 0 && displayedDirectItems.length === 0 && (
+                  {query && displayedUnifiedItems.length === 0 && (
                     <div className="p-8 text-center bg-white/70 backdrop-blur-md rounded-2xl border border-gray-200 shadow-2xs my-4">
                       <Search size={32} className="text-gray-300 mx-auto mb-2" />
                       <h4 className="text-sm font-bold text-gray-800">No observations match "{searchQuery}"</h4>
@@ -1984,6 +1792,7 @@ export default function ProjectDetail() {
                                   item={item}
                                   floorPlan={fp}
                                   phase={phase}
+                                  photo={primaryPhotosMap[item.uuid]}
                                   showPhase={true}
                                   onStatusChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
                                   onClick={() => { setCurrentPunchItem(item.uuid); openPunchForm() }}
@@ -2284,8 +2093,48 @@ export default function ProjectDetail() {
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+              {/* Zoom Controls */}
+              <div className="flex items-center gap-1 bg-white/10 px-2 py-1 rounded-xl backdrop-blur-md">
+                <button
+                  type="button"
+                  onClick={handleZoomOutLightbox}
+                  disabled={lightboxZoom <= 1}
+                  className="p-1 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Zoom Out"
+                >
+                  <ZoomOut size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetZoomLightbox}
+                  className="px-1.5 py-0.5 text-xs font-mono font-bold text-white hover:bg-white/20 rounded-md cursor-pointer"
+                  title="Reset Zoom (100%)"
+                >
+                  {Math.round(lightboxZoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  onClick={handleZoomInLightbox}
+                  disabled={lightboxZoom >= 4}
+                  className="p-1 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Zoom In"
+                >
+                  <ZoomIn size={15} />
+                </button>
+                {lightboxZoom > 1 && (
+                  <button
+                    type="button"
+                    onClick={handleResetZoomLightbox}
+                    className="p-1 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer border-l border-white/20 pl-1.5 ml-0.5"
+                    title="Fit to Screen"
+                  >
+                    <Maximize2 size={13} />
+                  </button>
+                )}
+              </div>
+
               {displayedGalleryPhotos.length > 1 && (
-                <span className="text-xs font-mono font-bold text-white/80 bg-white/10 px-2.5 py-1 rounded-full whitespace-nowrap">
+                <span className="text-xs font-mono font-bold text-white/80 bg-white/10 px-2.5 py-1 rounded-full whitespace-nowrap hidden sm:inline-block">
                   {previewPhotoIndex + 1} / {displayedGalleryPhotos.length}
                 </span>
               )}
@@ -2315,10 +2164,11 @@ export default function ProjectDetail() {
             </div>
           </div>
 
-          {/* Center Image Container with Desktop Arrows & Mobile Swipe */}
+          {/* Center Image Container with Desktop Arrows, Mobile Swipe & Zoom */}
           <div
             className="flex-1 min-h-0 relative w-full flex items-center justify-center p-2 overflow-hidden"
             onClick={e => e.stopPropagation()}
+            onWheel={handleWheelLightbox}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
@@ -2339,14 +2189,29 @@ export default function ProjectDetail() {
               </button>
             )}
 
-            {/* Main Observation Photo */}
-            <img
-              key={activePreviewPhoto.photo.uuid || activePreviewPhoto.photo.id || previewPhotoIndex}
-              src={activePreviewPhoto.photo.imageData || activePreviewPhoto.photo.dataUrl}
-              alt={activePreviewPhoto.item?.title || 'Observation photo'}
-              className="max-h-full max-w-full object-contain rounded-xl shadow-2xl select-none"
-              draggable={false}
-            />
+            {/* Main Observation Photo with Zoom & Pan */}
+            <div
+              className="relative max-h-full max-w-full flex items-center justify-center transition-transform duration-75 select-none"
+              style={{
+                transform: `translate3d(${lightboxPan.x}px, ${lightboxPan.y}px, 0px) scale(${lightboxZoom})`,
+                cursor: lightboxZoom > 1 ? 'grab' : 'zoom-in',
+                touchAction: lightboxZoom > 1 ? 'none' : 'auto',
+              }}
+              onPointerDown={handlePointerDownLightbox}
+              onPointerMove={handlePointerMoveLightbox}
+              onPointerUp={handlePointerUpLightbox}
+              onPointerCancel={handlePointerUpLightbox}
+              onDoubleClick={handleToggleZoomLightbox}
+              title={lightboxZoom > 1 ? 'Drag to pan photo' : 'Double click to zoom in'}
+            >
+              <img
+                key={activePreviewPhoto.photo.uuid || activePreviewPhoto.photo.id || previewPhotoIndex}
+                src={activePreviewPhoto.photo.imageData || activePreviewPhoto.photo.dataUrl}
+                alt={activePreviewPhoto.item?.title || 'Observation photo'}
+                className="max-h-[75vh] max-w-full object-contain rounded-xl shadow-2xl pointer-events-none select-none"
+                draggable={false}
+              />
+            </div>
 
             {/* Desktop Next Button */}
             {displayedGalleryPhotos.length > 1 && (
@@ -2453,6 +2318,7 @@ function FloorPlanCard({
   return (
     <div
       data-fp-uuid={fp.uuid}
+      data-unified-uuid={fp.uuid}
       draggable={true}
       onDragStart={(e) => onDragStart(e, fp.uuid)}
       onDragOver={(e) => onDragOver(e, fp.uuid)}
@@ -2489,7 +2355,7 @@ function FloorPlanCard({
         <GripVertical size={20} className="block pointer-events-none" />
       </div>
 
-      {/* Pin count accordion toggle button: height matches the h-14 image preview next to it */}
+      {/* Pin count accordion toggle button: height matches the h-14 preview card next to it */}
       <div className="flex flex-col items-center justify-center flex-shrink-0">
         <button
           type="button"
@@ -2521,19 +2387,19 @@ function FloorPlanCard({
         </button>
       </div>
 
-      {/* Image Preview with distinct border */}
-      <div className="w-14 h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs">
-        {fp.imageData
-          ? <img src={fp.imageData} alt={fp.name} className="w-full h-full object-cover pointer-events-none" />
-          : <FileImage size={24} className="m-auto mt-3.5 text-gray-400" />
-        }
-      </div>
-
       <div className="flex-1 min-w-0">
         <h3 className="font-semibold text-gray-900 text-sm truncate">{fp.name}</h3>
         <p className="text-xs text-gray-500 font-medium mt-0.5">
           {sorted.length} observation{sorted.length !== 1 ? 's' : ''}
         </p>
+      </div>
+
+      {/* Image Preview on right side */}
+      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center">
+        {fp.imageData
+          ? <img src={fp.imageData} alt={fp.name} className="w-full h-full object-cover pointer-events-none" />
+          : <FileImage size={24} className="text-gray-400" />
+        }
       </div>
 
       {/* Action buttons: Move Up / Down, Rename, Delete */}
@@ -2578,7 +2444,6 @@ function FloorPlanCard({
         >
           <Trash2 size={15} />
         </button>
-        <ChevronRight size={16} className="text-gray-300 group-hover:text-brand-500 group-hover:translate-x-0.5 transition-all ml-0.5" />
       </div>
     </div>
   )
@@ -2587,6 +2452,7 @@ function PunchItemRow({
   item,
   floorPlan,
   phase,
+  photo,
   showPhase = true,
   onStatusChange,
   onClick,
@@ -2612,9 +2478,11 @@ function PunchItemRow({
 }) {
   const pinColor = useAppStore(s => s.pinColor)
   const { r, g, b } = hexToRgb(pinColor)
+  const itemPhoto = photo || item.imageData || item.photo || item.primaryPhoto
   return (
     <div
       data-item-uuid={item.uuid}
+      data-unified-uuid={item.uuid}
       draggable={draggable}
       onDragStart={(e) => onDragStart && onDragStart(e, item.uuid)}
       onDragOver={(e) => onDragOver && onDragOver(e, item.uuid)}
@@ -2663,13 +2531,13 @@ function PunchItemRow({
 
       {/* Observation Title & Details */}
       <div className="flex-1 min-w-0">
-        <p
-          className="font-semibold text-gray-900 text-sm truncate max-w-[280px] sm:max-w-[360px] md:max-w-[480px]"
-          title={item.title || item.notes || `Item #${item.itemNumber}`}
+        <h4
+          className="font-bold text-gray-900 text-sm leading-snug line-clamp-2 sm:line-clamp-1 block"
+          title={item.title || item.notes || `Observation #${item.itemNumber}`}
         >
-          {truncateObservationTitle(item.title || item.notes || `Item #${item.itemNumber}`, 53)}
-        </p>
-        <div className="flex gap-2 mt-0.5 flex-wrap items-center">
+          {truncateObservationTitle(item.title || item.notes || `Observation #${item.itemNumber}`, 80)}
+        </h4>
+        <div className="flex gap-2 mt-1 flex-wrap items-center">
           <ObservationStatusSelect status={item.status} onChange={onStatusChange} size="sm" />
           {item.priority && (
             <span className={`text-xs px-2 py-0.5 rounded-full font-bold shadow-2xs ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
@@ -2683,6 +2551,15 @@ function PunchItemRow({
             </span>
           )}
         </div>
+      </div>
+
+      {/* Observation Photo Thumbnail on right side */}
+      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center">
+        {itemPhoto ? (
+          <img src={itemPhoto} alt={item.title || `Observation #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
+        ) : (
+          <Camera size={20} className="text-gray-300" />
+        )}
       </div>
 
       {/* Action buttons: Move Up / Down, Edit, Delete */}

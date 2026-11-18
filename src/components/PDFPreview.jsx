@@ -10,7 +10,7 @@ import {
   getProject, getFloorPlans, getPunchItems, getPhotos, getPhases, sortFloorPlans, getUsers,
   logExport,
 } from '../db/database'
-import { formatVisitDateTime, formatDatePattern, normalizeObservationStatus } from '../utils/formatters'
+import { formatVisitDateTime, formatDatePattern, normalizeObservationStatus, stripHtmlToPlainText } from '../utils/formatters'
 import { getPdfFont, getFontFamily, FONT_OPTIONS } from '../utils/font'
 import { hexToRgb } from '../utils/theme'
 import { checkProjectLicense } from '../services/licenseService'
@@ -85,7 +85,22 @@ export default function PDFPreview() {
   const [filterTrade,     setFilterTrade]     = useState('All')
 
   // Visibility Controls for Report Export Fields
+  // Observation Images Layout: 'below' (Below observation notes) or 'right' (On the right side)
+  const [imageLayout, setImageLayout] = useState(() => {
+    try {
+      return localStorage.getItem('sitepunch_pdf_image_layout') || 'below'
+    } catch {
+      return 'below'
+    }
+  })
+
+  // Visibility Controls for Report Export Fields
   const [exportFields, setExportFields] = useState(() => {
+    let initialImageLayout = 'below'
+    try {
+      initialImageLayout = localStorage.getItem('sitepunch_pdf_image_layout') || 'below'
+    } catch {}
+
     const defaults = {
       keyPlans: true, // Key Plans
       photos:   true, // Observation photos
@@ -96,21 +111,19 @@ export default function PDFPreview() {
       notes:    true, // Pin Observation Description
       reportCreatedBy: true, // Report Created By
       attendees: true, // List of Attendees
+      photosOnRight: initialImageLayout === 'right', // Observation Images on Right Side (true = on right side, false = below notes)
     }
     try {
       const saved = localStorage.getItem('sitepunch_export_fields')
-      if (saved) return { ...defaults, ...JSON.parse(saved) }
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.photosOnRight === undefined) {
+          parsed.photosOnRight = initialImageLayout === 'right'
+        }
+        return { ...defaults, ...parsed }
+      }
     } catch {}
     return defaults
-  })
-
-  // Observation Images Layout: 'below' (Below observation notes) or 'right' (On the right side)
-  const [imageLayout, setImageLayout] = useState(() => {
-    try {
-      return localStorage.getItem('sitepunch_pdf_image_layout') || 'below'
-    } catch {
-      return 'below'
-    }
   })
 
   const handleSetImageLayout = (layout) => {
@@ -122,7 +135,15 @@ export default function PDFPreview() {
 
   const toggleExportField = (key) => {
     setExportFields(prev => {
-      const next = { ...prev, [key]: !prev[key] }
+      const nextVal = !prev[key]
+      const next = { ...prev, [key]: nextVal }
+      if (key === 'photosOnRight') {
+        const newLayout = nextVal ? 'right' : 'below'
+        setImageLayout(newLayout)
+        try {
+          localStorage.setItem('sitepunch_pdf_image_layout', newLayout)
+        } catch {}
+      }
       try {
         localStorage.setItem('sitepunch_export_fields', JSON.stringify(next))
       } catch {}
@@ -141,9 +162,12 @@ export default function PDFPreview() {
       notes:    true,
       reportCreatedBy: true,
       attendees: true,
+      photosOnRight: true,
     }
     setExportFields(all)
+    setImageLayout('right')
     try {
+      localStorage.setItem('sitepunch_pdf_image_layout', 'right')
       localStorage.setItem('sitepunch_export_fields', JSON.stringify(all))
     } catch {}
   }
@@ -159,9 +183,12 @@ export default function PDFPreview() {
       notes:    false,
       reportCreatedBy: false,
       attendees: false,
+      photosOnRight: false,
     }
     setExportFields(none)
+    setImageLayout('below')
     try {
+      localStorage.setItem('sitepunch_pdf_image_layout', 'below')
       localStorage.setItem('sitepunch_export_fields', JSON.stringify(none))
     } catch {}
   }
@@ -548,7 +575,7 @@ export default function PDFPreview() {
         if (exportFields.status)         cols.push(escapeCSV(normalizeObservationStatus(item.status)))
         cols.push(escapeCSV(item.assignedTo || ''))
         if (exportFields.dueDate)        cols.push(escapeCSV(item.dueDate || ''))
-        if (exportFields.notes)          cols.push(escapeCSV(item.notes || ''))
+        if (exportFields.notes)          cols.push(escapeCSV(stripHtmlToPlainText(item.notes || '')))
         cols.push(
           escapeCSV(phase?.visitDate || ''),
           escapeCSV(phase?.visitTime || ''),
@@ -727,7 +754,7 @@ export default function PDFPreview() {
       itemsToExport.forEach((it, idx) => {
         const pCount = (photosMap[it.uuid] || []).length
         readme += `#${it.itemNumber || idx + 1} | Category: ${it.trade || 'General'} | Priority: ${it.priority || 'Medium'} | Status: ${normalizeObservationStatus(it.status)}\r\n`
-        if (it.notes) readme += `   Notes: ${it.notes}\r\n`
+        if (it.notes) readme += `   Notes: ${stripHtmlToPlainText(it.notes)}\r\n`
         if (pCount > 0) readme += `   Photos: ${pCount} attached\r\n`
         readme += `\r\n`
       })
@@ -1189,9 +1216,11 @@ export default function PDFPreview() {
           : Math.max(50, photoStartX - margin - 6)
 
         // ── Observation text and label preparation ──
-        const rawObsText = (item.notes && item.title && item.notes.trim() !== item.title.trim())
-          ? `${item.title.trim()} — ${item.notes.trim()}`
-          : (item.notes || item.title || '').trim()
+        const cleanNotes = stripHtmlToPlainText(item.notes || '')
+        const cleanTitle = stripHtmlToPlainText(item.title || '')
+        const rawObsText = (cleanNotes && cleanTitle && cleanNotes.trim() !== cleanTitle.trim())
+          ? `${cleanTitle.trim()} — ${cleanNotes.trim()}`
+          : (cleanNotes || cleanTitle || '').trim()
 
         const obsPrefix = 'Observation: '
         const fullObsString = rawObsText ? `${obsPrefix}${rawObsText}` : ''
@@ -1810,6 +1839,11 @@ export default function PDFPreview() {
                       { id: 'notes',           label: 'Pin Observation Description' },
                       { id: 'reportCreatedBy', label: 'Report Created By' },
                       { id: 'attendees',       label: 'List of Attendees' },
+                      {
+                        id: 'photosOnRight',
+                        label: 'Observation Images on Right Side',
+                        sublabel: exportFields.photosOnRight ? 'On the right side' : 'Below observation notes'
+                      },
                     ].map(field => {
                       const isChecked = !!exportFields[field.id]
                       return (
@@ -1837,53 +1871,16 @@ export default function PDFPreview() {
                             <p className={`text-xs font-bold leading-tight ${isChecked ? 'text-gray-900' : 'text-gray-500'}`}>
                               {field.label}
                             </p>
+                            {field.sublabel && (
+                              <p className={`text-[10px] mt-0.5 font-medium leading-tight ${isChecked ? 'text-brand-700' : 'text-gray-400'}`}>
+                                {field.sublabel}
+                              </p>
+                            )}
                           </div>
                         </button>
                       )
                     })}
                   </div>
-
-                  {/* Observation Images Placement Option (Below observation notes or on the right side) */}
-                  {exportFields.photos && (
-                    <div className="pt-3.5 mt-3.5 border-t border-gray-150">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                        <div>
-                          <label className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
-                            <ImageIcon size={14} className="text-brand-600" />
-                            <span>Observation Images Placement</span>
-                          </label>
-                          <p className="text-[11px] text-gray-500">
-                            Choose whether observation images appear below observation notes or on the right side
-                          </p>
-                        </div>
-
-                        <div className="inline-flex p-1 bg-gray-100 rounded-xl border border-gray-200 self-start sm:self-auto">
-                          <button
-                            type="button"
-                            onClick={() => handleSetImageLayout('below')}
-                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                              imageLayout === 'below'
-                                ? 'bg-white text-gray-900 shadow-xs ring-1 ring-black/5 font-bold'
-                                : 'text-gray-500 hover:text-gray-800'
-                            }`}
-                          >
-                            <span>Below observation notes</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSetImageLayout('right')}
-                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                              imageLayout === 'right'
-                                ? 'bg-white text-gray-900 shadow-xs ring-1 ring-black/5 font-bold'
-                                : 'text-gray-500 hover:text-gray-800'
-                            }`}
-                          >
-                            <span>On the right side</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -2178,23 +2175,6 @@ export default function PDFPreview() {
               paddingRight: 'calc(0.75rem + env(safe-area-inset-right, 0px))',
             }}
           >
-            <div className="bg-gray-900/80 border border-gray-700 rounded-xl px-4 py-2 mb-2.5 text-xs text-gray-300 flex items-center justify-between gap-3 flex-shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <Eye size={15} className="text-blue-400 flex-shrink-0" />
-                <span className="truncate">
-                  Please review your report preview below before confirming export. Scroll through pages to inspect observations.
-                </span>
-              </div>
-              <a
-                href={pdfPreviewModal.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-400 hover:text-blue-300 font-semibold underline flex-shrink-0"
-              >
-                Open Full Screen
-              </a>
-            </div>
-
             <div className="flex-1 w-full bg-white rounded-xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col">
               <iframe
                 src={`${pdfPreviewModal.url}#view=FitH&toolbar=1`}

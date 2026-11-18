@@ -165,13 +165,43 @@ export function formatAttendeesSummary(attendees, maxItems = 2) {
 }
 
 /**
+ * Strips HTML tags and markdown markers, converting block tags to newlines for clean plain-text output.
+ */
+export function stripHtmlToPlainText(html) {
+  if (!html) return ''
+  let str = String(html)
+  // Remove markdown formatting artifacts if present
+  str = str.replace(/\*\*(.*?)\*\*/g, '$1')
+  str = str.replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '$1')
+  str = str.replace(/__(.*?)__/g, '$1')
+  // Convert HTML line breaks & blocks
+  str = str.replace(/<br\s*[\/]?>/gi, '\n')
+  str = str.replace(/<\/p>/gi, '\n')
+  str = str.replace(/<\/div>/gi, '\n')
+  str = str.replace(/<li>/gi, '• ')
+  str = str.replace(/<\/li>/gi, '\n')
+  // Strip all other HTML tags
+  str = str.replace(/<[^>]+>/g, '')
+  // Decode HTML entities
+  str = str.replace(/&nbsp;/g, ' ')
+  str = str.replace(/&amp;/g, '&')
+  str = str.replace(/&lt;/g, '<')
+  str = str.replace(/&gt;/g, '>')
+  str = str.replace(/&quot;/g, '"')
+  str = str.replace(/&#39;/g, "'")
+  // Clean up excess blank lines
+  str = str.replace(/\n{3,}/g, '\n\n')
+  return str.trim()
+}
+
+/**
  * Truncate long observation titles/notes and append ellipsis '...' to prevent text overflow.
  */
 export function truncateObservationTitle(text, maxLength = 53) {
   if (!text) return ''
-  const str = String(text).trim()
-  if (!str) return ''
-  const firstLine = str.split(/\r?\n/)[0].trim()
+  const clean = stripHtmlToPlainText(text)
+  if (!clean) return ''
+  const firstLine = clean.split(/\r?\n/)[0].trim()
   if (firstLine.length <= maxLength) return firstLine
   return firstLine.slice(0, maxLength).trimEnd() + '...'
 }

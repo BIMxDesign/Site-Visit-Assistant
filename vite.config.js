@@ -25,7 +25,7 @@ export default defineConfig({
       devOptions: {
         enabled: true
       },
-      includeAssets: ['favicon.ico', 'favicon.svg', 'apple-touch-icon.png', 'icons/*.png'],
+      includeAssets: ['favicon.ico', 'favicon.svg', 'favicon.png', 'apple-touch-icon.png', 'icons/*.png'],
       manifest: {
         name: 'Site Visit Assistant',
         short_name: 'Site Visit Assistant',

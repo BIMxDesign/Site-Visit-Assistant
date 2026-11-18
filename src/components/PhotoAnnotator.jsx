@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { getAnnotatorExportOptions, getStoredPhotoQuality } from '../utils/media'
 import {
-  X, ArrowRight, Pen,
-  Undo2, Redo2, Trash2, Check, Minus, Plus
+  X, ArrowRight, Pen, Hand, Crop, MousePointer, Type, Eraser,
+  Undo2, Redo2, Trash2, Check,
+  ZoomIn, ZoomOut, Maximize2
 } from 'lucide-react'
 
 // Construction / Architectural Revision Cloud Icon
@@ -24,36 +25,56 @@ function ConstructionCloudIcon({ size = 18, className = '' }) {
   )
 }
 
-const COLORS = [
-  '#a40e26', '#ef4444', '#f97316', '#eab308', '#22c55e',
-  '#3b82f6', '#8b5cf6', '#000000', '#ffffff'
-]
+// Exactly 3 primary markup colors
+const THREE_COLORS = ['#ef4444', '#f59e0b', '#3b82f6']
 
 const TOOLS = [
-  { id: 'cloud', icon: <ConstructionCloudIcon size={18} />, label: 'Cloud' },
-  { id: 'arrow', icon: <ArrowRight size={16} />,         label: 'Arrow' },
-  { id: 'pen',   icon: <Pen size={16} />,                label: 'Pen' },
+  { id: 'select', icon: <MousePointer size={16} />,          label: 'Select' },
+  { id: 'cloud',  icon: <ConstructionCloudIcon size={18} />, label: 'Cloud' },
+  { id: 'arrow',  icon: <ArrowRight size={16} />,             label: 'Arrow' },
+  { id: 'pen',    icon: <Pen size={16} />,                    label: 'Pen' },
+  { id: 'text',   icon: <Type size={16} />,                   label: 'Text' },
+  { id: 'pan',    icon: <Hand size={16} />,                   label: 'Pan' },
+  { id: 'crop',   icon: <Crop size={16} />,                   label: 'Crop' },
 ]
 
 export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onCancel }) {
   const canvasRef  = useRef(null)
   const overlayRef = useRef(null)
-  const imageMetaRef = useRef({ naturalWidth: 0, naturalHeight: 0, canvasWidth: 0 })
+  const imageMetaRef = useRef({ naturalWidth: 0, naturalHeight: 0, canvasWidth: 0, canvasHeight: 0 })
 
-  const [tool,    setTool]    = useState('cloud')
-  const [color,   setColor]   = useState('#a40e26')
-  const [strokeW, setStrokeW] = useState(3)
-  const [canUndo, setCanUndo] = useState(false)
-  const [canRedo, setCanRedo] = useState(false)
+  const [activeImageSrc, setActiveImageSrc] = useState(imageDataUrl)
+  const [imageHistory,   setImageHistory]   = useState([])
 
-  // Use refs so event handlers always access the live values without stale closures
+  const [tool,        setTool]        = useState('cloud')
+  const [color,       setColor]       = useState('#ef4444')
+  const [strokeW,     setStrokeW]     = useState(3)
+  const [canUndo,     setCanUndo]     = useState(false)
+  const [canRedo,     setCanRedo]     = useState(false)
+  const [selectedObj, setSelectedObj] = useState(null)
+
+  // Line weight pop-up state
+  const [showStrokePopup, setShowStrokePopup] = useState(false)
+  const strokePopupRef = useRef(null)
+
+  // Zoom state
+  const [zoomLevel, setZoomLevel] = useState(1)
+
+  // Crop mode state
+  const [isCropping, setIsCropping] = useState(false)
+  const [cropRect, setCropRect]     = useState({ x: 20, y: 20, width: 200, height: 200 })
+  const cropDragRef = useRef(null)
+
+  // Refs for stable event handlers
   const toolRef      = useRef('cloud')
-  const colorRef     = useRef('#a40e26')
+  const colorRef     = useRef('#ef4444')
   const strokeWRef   = useRef(3)
   const fabricRef    = useRef(null)
   const FabricLibRef = useRef(null)
 
   const isDrawing = useRef(false)
+  const isPanning = useRef(false)
+  const lastPanPt = useRef({ x: 0, y: 0 })
   const startPt   = useRef(null)
   const activeObj = useRef(null)
 
@@ -64,20 +85,55 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   useEffect(() => { colorRef.current   = color   }, [color])
   useEffect(() => { strokeWRef.current = strokeW }, [strokeW])
 
-  // Accessibility & UX: Handle Escape key to cancel/exit photo markup mode back to observation edit page
+  // Accessibility & UX: Handle Escape key
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
         e.stopImmediatePropagation()
+        if (isCropping) {
+          setIsCropping(false)
+          setTool('cloud')
+          return
+        }
         onCancel()
       }
     }
-    // Listen in capture phase (true) so it intercepts BEFORE App.jsx's global window listener
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [onCancel])
+  }, [onCancel, isCropping])
+
+  // Keyboard Delete key to remove selected annotation
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const fab = fabricRef.current
+        const active = fab?.getActiveObject()
+        if (active && !active.isEditing) {
+          e.preventDefault()
+          handleDeleteSelected()
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // Close line weight popup on click outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (strokePopupRef.current && !strokePopupRef.current.contains(e.target)) {
+        setShowStrokePopup(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('touchstart', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('touchstart', handleClickOutside)
+    }
+  }, [])
 
   // ── Initialize Fabric Canvas ──────────────────────────────────────────────
   useEffect(() => {
@@ -91,6 +147,13 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
       const canvas = canvasRef.current
       if (!canvas) return
+
+      if (fabricRef.current) {
+        try {
+          fabricRef.current.dispose()
+        } catch {}
+        fabricRef.current = null
+      }
 
       const wrap = overlayRef.current
       const maxW = (wrap ? wrap.clientWidth : window.innerWidth) - 32
@@ -106,15 +169,26 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
           naturalWidth: img.naturalWidth || img.width,
           naturalHeight: img.naturalHeight || img.height,
           canvasWidth: cw,
+          canvasHeight: ch,
         }
+
+        // Set default crop box
+        setCropRect({
+          x: Math.round(cw * 0.1),
+          y: Math.round(ch * 0.1),
+          width: Math.round(cw * 0.8),
+          height: Math.round(ch * 0.8),
+        })
 
         const fab = new Fabric.Canvas(canvas, {
           width: cw,
           height: ch,
           isDrawingMode: toolRef.current === 'pen',
-          selection: false,
+          selection: toolRef.current === 'select',
+          defaultCursor: toolRef.current === 'select' ? 'default' : toolRef.current === 'pan' ? 'grab' : 'crosshair',
         })
         fabricRef.current = fab
+        setZoomLevel(1)
 
         if (toolRef.current === 'pen' && fab.freeDrawingBrush) {
           fab.freeDrawingBrush.color = colorRef.current
@@ -123,7 +197,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
         // Set background image
         Fabric.Image.fromURL(
-          imageDataUrl,
+          activeImageSrc,
           (fImg) => {
             if (disposed || !fImg) return
             fImg.scaleX = cw / img.width
@@ -135,13 +209,35 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
           { crossOrigin: 'anonymous' }
         )
 
-        // Event listeners
+        // Mouse Wheel Zoom
+        fab.on('mouse:wheel', (opt) => {
+          const delta = opt.e.deltaY
+          let zoom = fab.getZoom()
+          zoom *= 0.999 ** delta
+          if (zoom > 4) zoom = 4
+          if (zoom < 1) {
+            zoom = 1
+            fab.setViewportTransform([1, 0, 0, 1, 0, 0])
+          } else {
+            fab.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom)
+          }
+          setZoomLevel(zoom)
+          opt.e.preventDefault()
+          opt.e.stopPropagation()
+        })
+
+        // Selection listeners
+        fab.on('selection:created', (e) => setSelectedObj(e.selected ? e.selected[0] : null))
+        fab.on('selection:updated', (e) => setSelectedObj(e.selected ? e.selected[0] : null))
+        fab.on('selection:cleared', () => setSelectedObj(null))
+
+        // Drawing & interaction listeners
         fab.on('mouse:down', onMouseDown)
         fab.on('mouse:move', onMouseMove)
         fab.on('mouse:up',   onMouseUp)
         fab.on('path:created', onPathCreated)
       }
-      img.src = imageDataUrl
+      img.src = activeImageSrc
     }
 
     init()
@@ -149,37 +245,137 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     return () => {
       disposed = true
       if (fabricRef.current) {
-        fabricRef.current.dispose()
+        try {
+          fabricRef.current.dispose()
+        } catch {}
         fabricRef.current = null
       }
     }
-  }, [imageDataUrl])
+  }, [activeImageSrc])
 
-  // Update free drawing mode whenever tool/color/stroke changes
+  // Update free drawing mode / cursor / selection whenever tool/color/stroke changes
   useEffect(() => {
     const fab = fabricRef.current
     if (!fab) return
-    if (tool === 'pen') {
+
+    if (tool === 'select') {
+      fab.isDrawingMode = false
+      fab.selection = true
+      fab.defaultCursor = 'default'
+      fab.forEachObject(obj => {
+        obj.selectable = true
+        obj.evented = true
+        obj.cornerColor = '#3b82f6'
+        obj.cornerSize = 8
+        obj.transparentCorners = false
+      })
+    } else if (tool === 'pen') {
       fab.isDrawingMode = true
+      fab.selection = false
+      fab.discardActiveObject()
+      setSelectedObj(null)
+      fab.defaultCursor = 'crosshair'
+      fab.forEachObject(obj => {
+        obj.selectable = false
+        obj.evented = false
+      })
       if (fab.freeDrawingBrush) {
         fab.freeDrawingBrush.color = color
         fab.freeDrawingBrush.width = strokeW
       }
-    } else {
+    } else if (tool === 'pan') {
       fab.isDrawingMode = false
+      fab.selection = false
+      fab.discardActiveObject()
+      setSelectedObj(null)
+      fab.defaultCursor = 'grab'
+      fab.forEachObject(obj => {
+        obj.selectable = false
+        obj.evented = false
+      })
+    } else if (tool === 'text') {
+      fab.isDrawingMode = false
+      fab.selection = false
+      fab.discardActiveObject()
+      setSelectedObj(null)
+      fab.defaultCursor = 'text'
+      fab.forEachObject(obj => {
+        obj.selectable = false
+        obj.evented = false
+      })
+    } else {
+      // cloud, arrow, crop
+      fab.isDrawingMode = false
+      fab.selection = false
+      fab.discardActiveObject()
+      setSelectedObj(null)
+      fab.defaultCursor = 'crosshair'
+      fab.forEachObject(obj => {
+        obj.selectable = false
+        obj.evented = false
+      })
     }
+    fab.renderAll()
   }, [tool, color, strokeW])
 
-  // ── Drawing Events ────────────────────────────────────────────────────────
+  // ── Drawing, Selection & Panning Events ───────────────────────────────────
   function getPointer(e) {
     const fab = fabricRef.current
     return fab ? fab.getPointer(e.e || e) : { x: 0, y: 0 }
   }
 
   function onMouseDown(e) {
-    if (toolRef.current === 'pen') return
     const fab = fabricRef.current
     if (!fab) return
+
+    // In select mode, let Fabric handle object selection and dragging
+    if (toolRef.current === 'select') {
+      return
+    }
+
+    if (toolRef.current === 'pan') {
+      isPanning.current = true
+      lastPanPt.current = { x: e.e.clientX, y: e.e.clientY }
+      fab.defaultCursor = 'grabbing'
+      return
+    }
+
+    // Add Text Annotation on Click
+    if (toolRef.current === 'text') {
+      const Fabric = FabricLibRef.current
+      if (!Fabric) return
+      const pt = getPointer(e)
+      const fontSize = Math.max(16, strokeWRef.current * 3 + 12)
+      const iText = new Fabric.IText('Text note', {
+        left: pt.x,
+        top: pt.y,
+        fill: colorRef.current,
+        fontSize: fontSize,
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fontWeight: 'bold',
+        selectable: true,
+        padding: 4,
+        cornerColor: '#3b82f6',
+        cornerSize: 8,
+        transparentCorners: false,
+      })
+      fab.add(iText)
+      fab.setActiveObject(iText)
+      iText.enterEditing()
+      iText.selectAll()
+      fab.renderAll()
+
+      undoStack.current.push(iText)
+      redoStack.current = []
+      setCanUndo(true)
+      setCanRedo(false)
+      setSelectedObj(iText)
+      setTool('select')
+      toolRef.current = 'select'
+      return
+    }
+
+    if (toolRef.current === 'pen') return
 
     isDrawing.current = true
     startPt.current   = getPointer(e)
@@ -187,10 +383,22 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   }
 
   function onMouseMove(e) {
+    const fab = fabricRef.current
+    if (!fab) return
+
+    // Pan handling
+    if (isPanning.current && toolRef.current === 'pan') {
+      const vpt = fab.viewportTransform
+      vpt[4] += e.e.clientX - lastPanPt.current.x
+      vpt[5] += e.e.clientY - lastPanPt.current.y
+      fab.requestRenderAll()
+      lastPanPt.current = { x: e.e.clientX, y: e.e.clientY }
+      return
+    }
+
     if (!isDrawing.current || toolRef.current === 'pen' || !startPt.current) return
-    const fab    = fabricRef.current
     const Fabric = FabricLibRef.current
-    if (!fab || !Fabric) return
+    if (!Fabric) return
 
     const { x, y }         = getPointer(e)
     const { x: ox, y: oy } = startPt.current
@@ -226,6 +434,9 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
           strokeLineCap: 'round',
           strokeLineJoin: 'round',
           selectable: false,
+          cornerColor: '#3b82f6',
+          cornerSize: 8,
+          transparentCorners: false,
         })
       }
     } else if (currentTool === 'cloud') {
@@ -240,6 +451,13 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
   }
 
   function onMouseUp() {
+    if (isPanning.current) {
+      isPanning.current = false
+      const fab = fabricRef.current
+      if (fab) fab.defaultCursor = 'grab'
+      return
+    }
+
     if (!isDrawing.current) return
     isDrawing.current = false
     startPt.current   = null
@@ -255,7 +473,13 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
 
   function onPathCreated(e) {
     if (e && e.path) {
-      e.path.set({ selectable: false })
+      e.path.set({
+        selectable: toolRef.current === 'select',
+        evented: toolRef.current === 'select',
+        cornerColor: '#3b82f6',
+        cornerSize: 8,
+        transparentCorners: false,
+      })
       undoStack.current.push(e.path)
       redoStack.current = []
       setCanUndo(true)
@@ -263,12 +487,14 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     }
   }
 
-  // ── History Controls ──────────────────────────────────────────────────────
+  // ── History & Delete Controls ─────────────────────────────────────────────
   function undo() {
     const fab = fabricRef.current
     if (!fab || undoStack.current.length === 0) return
     const last = undoStack.current.pop()
     fab.remove(last)
+    fab.discardActiveObject()
+    setSelectedObj(null)
     fab.renderAll()
     redoStack.current.push(last)
     setCanUndo(undoStack.current.length > 0)
@@ -286,12 +512,15 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     setCanRedo(redoStack.current.length > 0)
   }
 
-  function clear() {
+  // Clear all annotations (Eraser icon)
+  function clearAllAnnotations() {
     const fab = fabricRef.current
     if (!fab) return
     if (!confirm('Clear all annotations on this photo?')) return
     const objects = fab.getObjects()
     objects.forEach(obj => fab.remove(obj))
+    fab.discardActiveObject()
+    setSelectedObj(null)
     fab.renderAll()
     undoStack.current = []
     redoStack.current = []
@@ -299,13 +528,171 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     setCanRedo(false)
   }
 
+  // Delete only the currently selected annotation
+  function handleDeleteSelected() {
+    const fab = fabricRef.current
+    if (!fab) return
+    const active = fab.getActiveObject()
+    if (active) {
+      fab.remove(active)
+      fab.discardActiveObject()
+      fab.renderAll()
+      undoStack.current = undoStack.current.filter(o => o !== active)
+      setSelectedObj(null)
+    }
+  }
+
+  // ── Zoom In / Out / Reset ─────────────────────────────────────────────────
+  const handleZoomIn = () => {
+    const fab = fabricRef.current
+    if (!fab) return
+    const newZoom = Math.min(4, fab.getZoom() * 1.25)
+    fab.zoomToPoint({ x: fab.width / 2, y: fab.height / 2 }, newZoom)
+    setZoomLevel(newZoom)
+  }
+
+  const handleZoomOut = () => {
+    const fab = fabricRef.current
+    if (!fab) return
+    let newZoom = Math.max(1, fab.getZoom() / 1.25)
+    if (newZoom <= 1.05) {
+      newZoom = 1
+      fab.setViewportTransform([1, 0, 0, 1, 0, 0])
+    } else {
+      fab.zoomToPoint({ x: fab.width / 2, y: fab.height / 2 }, newZoom)
+    }
+    setZoomLevel(newZoom)
+  }
+
+  const handleResetZoom = () => {
+    const fab = fabricRef.current
+    if (!fab) return
+    fab.setViewportTransform([1, 0, 0, 1, 0, 0])
+    setZoomLevel(1)
+  }
+
+  // ── Crop Handling ─────────────────────────────────────────────────────────
+  const handleStartCrop = () => {
+    setIsCropping(true)
+    setTool('crop')
+    toolRef.current = 'crop'
+    handleResetZoom()
+  }
+
+  const handleCancelCrop = () => {
+    setIsCropping(false)
+    setTool('cloud')
+    toolRef.current = 'cloud'
+  }
+
+  const handleApplyCrop = () => {
+    const { canvasWidth, canvasHeight } = imageMetaRef.current
+    if (!canvasWidth || !canvasHeight) {
+      setIsCropping(false)
+      return
+    }
+
+    const img = new window.Image()
+    img.onload = () => {
+      const scaleX = img.naturalWidth / canvasWidth
+      const scaleY = img.naturalHeight / canvasHeight
+
+      const sx = Math.max(0, Math.round(cropRect.x * scaleX))
+      const sy = Math.max(0, Math.round(cropRect.y * scaleY))
+      const sw = Math.min(img.naturalWidth - sx, Math.round(cropRect.width * scaleX))
+      const sh = Math.min(img.naturalHeight - sy, Math.round(cropRect.height * scaleY))
+
+      if (sw < 15 || sh < 15) {
+        setIsCropping(false)
+        return
+      }
+
+      const offscreen = document.createElement('canvas')
+      offscreen.width = sw
+      offscreen.height = sh
+      const ctx = offscreen.getContext('2d')
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+
+      const croppedUrl = offscreen.toDataURL('image/jpeg', 0.95)
+      setImageHistory(prev => [...prev, activeImageSrc])
+      setActiveImageSrc(croppedUrl)
+      setIsCropping(false)
+      setTool('cloud')
+      toolRef.current = 'cloud'
+    }
+    img.src = activeImageSrc
+  }
+
+  // Interactive Crop Dragging & Resizing
+  const handleCropPointerDown = (e, handleType) => {
+    e.stopPropagation()
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
+    cropDragRef.current = {
+      type: handleType,
+      startX: e.clientX,
+      startY: e.clientY,
+      initialRect: { ...cropRect },
+    }
+  }
+
+  const handleCropPointerMove = (e) => {
+    if (!cropDragRef.current) return
+    const { type, startX, startY, initialRect } = cropDragRef.current
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+    const { canvasWidth, canvasHeight } = imageMetaRef.current
+    if (!canvasWidth || !canvasHeight) return
+
+    setCropRect(prev => {
+      let { x, y, width, height } = initialRect
+      const minSize = 35
+
+      if (type === 'move') {
+        x = Math.max(0, Math.min(canvasWidth - width, x + dx))
+        y = Math.max(0, Math.min(canvasHeight - height, y + dy))
+      } else if (type === 'tl') {
+        const nx = Math.max(0, Math.min(x + width - minSize, x + dx))
+        const ny = Math.max(0, Math.min(y + height - minSize, y + dy))
+        width += (x - nx)
+        height += (y - ny)
+        x = nx
+        y = ny
+      } else if (type === 'tr') {
+        width = Math.max(minSize, Math.min(canvasWidth - x, width + dx))
+        const ny = Math.max(0, Math.min(y + height - minSize, y + dy))
+        height += (y - ny)
+        y = ny
+      } else if (type === 'bl') {
+        const nx = Math.max(0, Math.min(x + width - minSize, x + dx))
+        width += (x - nx)
+        x = nx
+        height = Math.max(minSize, Math.min(canvasHeight - y, height + dy))
+      } else if (type === 'br') {
+        width = Math.max(minSize, Math.min(canvasWidth - x, width + dx))
+        height = Math.max(minSize, Math.min(canvasHeight - y, height + dy))
+      }
+      return { x, y, width, height }
+    })
+  }
+
+  const handleCropPointerUp = () => {
+    cropDragRef.current = null
+  }
+
   // ── Save ──────────────────────────────────────────────────────────────────
   function handleSave() {
     const fab = fabricRef.current
     if (!fab) {
-      onSave(imageDataUrl)
+      onSave(activeImageSrc)
       return
     }
+
+    // Reset viewport transform so exported canvas is never clipped by current zoom/pan
+    const currentVpt = fab.viewportTransform ? fab.viewportTransform.slice() : null
+    if (fab.setViewportTransform) {
+      fab.setViewportTransform([1, 0, 0, 1, 0, 0])
+    }
+
     const { naturalWidth, naturalHeight, canvasWidth } = imageMetaRef.current
     const exportOpts = getAnnotatorExportOptions(
       naturalWidth,
@@ -314,25 +701,27 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
       photoQuality || getStoredPhotoQuality()
     )
     const dataUrl = fab.toDataURL(exportOpts)
+
+    // Restore viewport transform
+    if (currentVpt && fab.setViewportTransform) {
+      fab.setViewportTransform(currentVpt)
+      fab.renderAll()
+    }
+
     onSave(dataUrl)
   }
 
   // ── Tool / Style Switchers ─────────────────────────────────────────────────
   function handleSelectTool(id) {
+    if (id === 'crop') {
+      handleStartCrop()
+      return
+    }
+    if (isCropping) {
+      setIsCropping(false)
+    }
     setTool(id)
     toolRef.current = id
-    const fab = fabricRef.current
-    if (fab) {
-      if (id === 'pen') {
-        fab.isDrawingMode = true
-        if (fab.freeDrawingBrush) {
-          fab.freeDrawingBrush.color = colorRef.current
-          fab.freeDrawingBrush.width = strokeWRef.current
-        }
-      } else {
-        fab.isDrawingMode = false
-      }
-    }
   }
 
   function handleSelectColor(c) {
@@ -342,44 +731,60 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
     if (fab && fab.freeDrawingBrush) {
       fab.freeDrawingBrush.color = c
     }
+    // If an object or text is currently selected, update its color
+    if (fab) {
+      const active = fab.getActiveObject()
+      if (active) {
+        if (active.type === 'i-text' || active.type === 'text') {
+          active.set('fill', c)
+        } else {
+          active.set('stroke', c)
+        }
+        fab.renderAll()
+      }
+    }
   }
 
-  function handleStrokeDelta(delta) {
-    setStrokeW(prev => {
-      const next = Math.min(24, Math.max(1, prev + delta))
-      strokeWRef.current = next
-      const fab = fabricRef.current
-      if (fab && fab.freeDrawingBrush) {
-        fab.freeDrawingBrush.width = next
+  function handleSetStrokeWidth(w) {
+    setStrokeW(w)
+    strokeWRef.current = w
+    const fab = fabricRef.current
+    if (fab && fab.freeDrawingBrush) {
+      fab.freeDrawingBrush.width = w
+    }
+    if (fab) {
+      const active = fab.getActiveObject()
+      if (active && active.type !== 'i-text' && active.type !== 'text') {
+        active.set('strokeWidth', w)
+        fab.renderAll()
       }
-      return next
-    })
+    }
   }
 
   return (
     <div ref={overlayRef} className="fixed inset-0 z-[60] bg-gray-900 flex flex-col select-none">
-      {/* Top toolbar - Fully Responsive Layout */}
+      {/* Top toolbar - Responsive Layout with max-w-4xl desktop alignment */}
       <div
-        className="bg-gray-800 border-b border-gray-700 px-2 sm:px-3 py-2 flex-shrink-0"
+        className="bg-gray-800 border-b border-gray-700 px-3 py-2 flex-shrink-0"
         style={{
           paddingTop: 'calc(8px + env(safe-area-inset-top, 0px))',
-          paddingLeft: 'calc(10px + env(safe-area-inset-left, 0px))',
-          paddingRight: 'calc(10px + env(safe-area-inset-right, 0px))',
+          paddingLeft: 'calc(12px + env(safe-area-inset-left, 0px))',
+          paddingRight: 'calc(12px + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 max-w-4xl mx-auto w-full">
-          {/* Row 1 on mobile: Tool buttons on left + Undo/Redo/Clear on right */}
-          <div className="flex items-center justify-between gap-1 w-full md:w-auto">
-            {/* Tool buttons with name below icon */}
-            <div className="flex items-center gap-1">
-              {TOOLS.map(t => (
+        <div className="flex flex-wrap items-center justify-between gap-2 max-w-4xl mx-auto w-full">
+          {/* Left: Tool buttons (Select, Cloud, Arrow, Pen, Text, Pan, Crop) */}
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap">
+            {TOOLS.map(t => {
+              const isActive = (tool === t.id && !isCropping) || (t.id === 'crop' && isCropping)
+              return (
                 <button
                   key={t.id}
                   type="button"
                   onClick={() => handleSelectTool(t.id)}
                   title={t.label}
-                  className={`flex flex-col items-center justify-center px-1.5 sm:px-2 py-1 rounded-lg transition-all min-w-[42px] sm:min-w-[48px] cursor-pointer ${
-                    tool === t.id
+                  className={`flex flex-col items-center justify-center px-2 py-1 rounded-xl transition-all min-w-[42px] cursor-pointer ${
+                    isActive
                       ? 'bg-brand-600 text-white shadow-sm ring-1 ring-white/30'
                       : 'text-gray-300 hover:text-white hover:bg-gray-700/80'
                   }`}
@@ -387,177 +792,297 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, onSave, onC
                   {t.icon}
                   <span className="text-[10px] leading-tight font-medium mt-0.5">{t.label}</span>
                 </button>
-              ))}
-            </div>
-
-            {/* Undo / Redo / Clear on mobile row 1 */}
-            <div className="flex items-center gap-0.5 md:hidden ml-auto">
-              <button
-                type="button"
-                onClick={undo}
-                disabled={!canUndo}
-                className={`p-1.5 rounded transition-colors ${
-                  canUndo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed'
-                }`}
-                title="Undo"
-              >
-                <Undo2 size={16} />
-              </button>
-              <button
-                type="button"
-                onClick={redo}
-                disabled={!canRedo}
-                className={`p-1.5 rounded transition-colors ${
-                  canRedo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed'
-                }`}
-                title="Redo"
-              >
-                <Redo2 size={16} />
-              </button>
-              <button
-                type="button"
-                onClick={clear}
-                className="p-1.5 text-red-400 hover:text-red-300 hover:bg-gray-700 rounded transition-colors ml-0.5"
-                title="Clear annotations"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
+              )
+            })}
           </div>
 
-          {/* Row 2 on mobile: Color Swatches + Stroke width; on desktop: in-line */}
-          <div className="flex items-center justify-between md:justify-start gap-2 py-1 md:py-0 border-t md:border-t-0 border-gray-700/60 md:border-none w-full md:w-auto">
-            {/* Color Swatches */}
-            <div className="flex items-center gap-2 sm:gap-1.5 overflow-x-auto py-0.5 scrollbar-hide">
-              {COLORS.map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => handleSelectColor(c)}
-                  className={`w-6 h-6 sm:w-5 sm:h-5 rounded-full flex-shrink-0 transition-all cursor-pointer ${
-                    color === c ? 'ring-2 ring-white scale-110 shadow-sm' : 'opacity-85 hover:opacity-100 hover:scale-105'
-                  }`}
-                  style={{ background: c }}
-                  title={`Select color ${c}`}
-                />
-              ))}
+          {/* Center: 3 Color Selection with Line Weight Popup Below */}
+          <div className="relative" ref={strokePopupRef}>
+            <div className="flex items-center gap-2 bg-gray-900/60 p-1.5 px-2.5 rounded-xl border border-gray-700/80">
+              <span className="text-[10px] uppercase font-bold text-gray-400 mr-0.5 hidden xs:inline">Color</span>
+              {THREE_COLORS.map(c => {
+                const isSelected = color === c
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => {
+                      handleSelectColor(c)
+                      setShowStrokePopup(prev => isSelected ? !prev : true)
+                    }}
+                    className={`w-7 h-7 sm:w-6 sm:h-6 rounded-full flex-shrink-0 transition-all cursor-pointer relative shadow-sm ${
+                      isSelected
+                        ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900 scale-110'
+                        : 'opacity-80 hover:opacity-100 hover:scale-105'
+                    }`}
+                    style={{ background: c }}
+                    title={`Select color (Click to change line weight)`}
+                  >
+                    {isSelected && (
+                      <span className="absolute inset-0 flex items-center justify-center text-white drop-shadow-xs">
+                        <Check size={13} strokeWidth={3} />
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
 
-            {/* Stroke width on mobile row 2 */}
-            <div className="flex md:hidden items-center gap-1 text-gray-300 bg-gray-900/60 px-1.5 py-0.5 rounded-lg border border-gray-700 ml-auto flex-shrink-0">
-              <button
-                type="button"
-                onClick={() => handleStrokeDelta(-1)}
-                className="p-1 hover:text-white hover:bg-gray-700 rounded transition-colors"
-                title="Decrease stroke"
-              >
-                <Minus size={12} />
-              </button>
-              <span className="text-white text-xs w-3.5 text-center font-bold">{strokeW}</span>
-              <button
-                type="button"
-                onClick={() => handleStrokeDelta(1)}
-                className="p-1 hover:text-white hover:bg-gray-700 rounded transition-colors"
-                title="Increase stroke"
-              >
-                <Plus size={12} />
-              </button>
-            </div>
+            {/* Line Weight Selection Pop-up Directly Below Color Selection */}
+            {showStrokePopup && (
+              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 bg-gray-900 border border-gray-700 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex flex-col gap-2.5 min-w-[210px] animate-fade-in">
+                <div className="flex items-center justify-between text-xs text-gray-300 pb-1.5 border-b border-gray-800">
+                  <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400">Line Weight</span>
+                  <span className="font-mono font-bold text-white bg-gray-800 px-2 py-0.5 rounded-md border border-gray-700 text-xs">
+                    {strokeW}px
+                  </span>
+                </div>
+
+                {/* Preset Thickness Options with Live Stroke Preview in the Active Color */}
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { label: 'Fine',  w: 2 },
+                    { label: 'Med',   w: 4 },
+                    { label: 'Thick', w: 7 },
+                    { label: 'Heavy', w: 12 },
+                  ].map(preset => {
+                    const isActive = strokeW === preset.w
+                    return (
+                      <button
+                        key={preset.w}
+                        type="button"
+                        onClick={() => handleSetStrokeWidth(preset.w)}
+                        className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
+                          isActive
+                            ? 'bg-gray-800 border-white/60 text-white shadow-xs'
+                            : 'bg-gray-950/60 border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800/80'
+                        }`}
+                        title={`${preset.label} (${preset.w}px)`}
+                      >
+                        <div
+                          className="w-full rounded-full mb-1.5 transition-all"
+                          style={{
+                            height: `${Math.min(10, Math.max(2, preset.w))}px`,
+                            background: color,
+                          }}
+                        />
+                        <span className="text-[10px] font-semibold">{preset.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Desktop-only: Stroke width & Undo/Redo/Clear grouped on the right */}
-          <div className="hidden md:flex items-center gap-2">
-            <div className="w-px h-6 bg-gray-700 mx-1 flex-shrink-0" />
-
-            {/* Stroke width */}
-            <div className="flex items-center gap-1 text-gray-300">
-              <button
-                type="button"
-                onClick={() => handleStrokeDelta(-1)}
-                className="p-1 hover:text-white hover:bg-gray-700 rounded transition-colors"
-                title="Decrease stroke"
-              >
-                <Minus size={14} />
-              </button>
-              <span className="text-white text-xs w-4 text-center font-bold">{strokeW}</span>
-              <button
-                type="button"
-                onClick={() => handleStrokeDelta(1)}
-                className="p-1 hover:text-white hover:bg-gray-700 rounded transition-colors"
-                title="Increase stroke"
-              >
-                <Plus size={14} />
-              </button>
-            </div>
-
-            <div className="w-px h-6 bg-gray-700 mx-1 flex-shrink-0" />
-
-            {/* Undo / Redo / Clear */}
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={undo}
-                disabled={!canUndo}
-                className={`p-1.5 rounded transition-colors ${
-                  canUndo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed'
-                }`}
-                title="Undo"
-              >
-                <Undo2 size={16} />
-              </button>
-              <button
-                type="button"
-                onClick={redo}
-                disabled={!canRedo}
-                className={`p-1.5 rounded transition-colors ${
-                  canRedo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed'
-                }`}
-                title="Redo"
-              >
-                <Redo2 size={16} />
-              </button>
-              <button
-                type="button"
-                onClick={clear}
-                className="p-1.5 text-red-400 hover:text-red-300 hover:bg-gray-700 rounded transition-colors ml-1"
-                title="Clear annotations"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
+          {/* Right: Undo / Redo / Clear Annotations (Eraser icon) */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                canUndo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
+              }`}
+              title="Undo annotation"
+            >
+              <Undo2 size={17} />
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                canRedo ? 'text-gray-200 hover:text-white hover:bg-gray-700' : 'text-gray-500 cursor-not-allowed opacity-50'
+              }`}
+              title="Redo annotation"
+            >
+              <Redo2 size={17} />
+            </button>
+            {/* Clear All Annotations changed to Eraser icon */}
+            <button
+              type="button"
+              onClick={clearAllAnnotations}
+              className="p-2 text-amber-400 hover:text-amber-300 hover:bg-gray-700 rounded-xl transition-colors ml-0.5 cursor-pointer"
+              title="Clear all annotations on photo (Eraser)"
+            >
+              <Eraser size={17} />
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Canvas container */}
-      <div className="flex-1 flex items-center justify-center overflow-hidden p-3 bg-gray-950">
-        <div className="rounded-lg shadow-2xl overflow-hidden border border-gray-800 touch-none">
+      {/* Canvas & Interactive Viewport Container */}
+      <div className="flex-1 relative flex items-center justify-center overflow-hidden p-3 bg-gray-950">
+        <div
+          className="relative rounded-lg shadow-2xl overflow-hidden border border-gray-800 touch-none flex items-center justify-center"
+          style={{
+            width: imageMetaRef.current.canvasWidth || 'auto',
+            height: imageMetaRef.current.canvasHeight || 'auto',
+          }}
+        >
           <canvas ref={canvasRef} className="block touch-none" />
+
+          {/* Floating Selected Annotation Toolbar (Move / Edit / Delete) */}
+          {selectedObj && tool === 'select' && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-gray-900/90 border border-gray-700 px-3 py-1.5 rounded-2xl shadow-2xl backdrop-blur-md animate-fade-in">
+              <span className="text-xs text-gray-300 font-semibold flex items-center gap-1.5">
+                <MousePointer size={13} className="text-blue-400" />
+                <span>{selectedObj.type === 'i-text' ? 'Text Selected (Double-click to edit)' : 'Annotation Selected'}</span>
+              </span>
+              <button
+                type="button"
+                onClick={handleDeleteSelected}
+                className="px-2.5 py-1 text-xs font-bold text-white bg-red-600 hover:bg-red-500 rounded-xl transition-colors flex items-center gap-1 shadow-md cursor-pointer ml-1"
+                title="Delete selected annotation (or press Delete/Backspace)"
+              >
+                <Trash2 size={13} /> Delete
+              </button>
+            </div>
+          )}
+
+          {/* Interactive Crop Overlay */}
+          {isCropping && (
+            <div
+              className="absolute inset-0 z-30 select-none overflow-hidden touch-none"
+              onPointerMove={handleCropPointerMove}
+              onPointerUp={handleCropPointerUp}
+              onPointerCancel={handleCropPointerUp}
+            >
+              {/* Crop Bounding Box with Dark Backdrop */}
+              <div
+                className="absolute border-2 border-white shadow-2xl cursor-move touch-none"
+                style={{
+                  left: cropRect.x,
+                  top: cropRect.y,
+                  width: cropRect.width,
+                  height: cropRect.height,
+                  boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.65)',
+                }}
+                onPointerDown={(e) => handleCropPointerDown(e, 'move')}
+              >
+                {/* 3x3 Rule-of-thirds grid */}
+                <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none opacity-40">
+                  <div className="border-r border-b border-white" />
+                  <div className="border-r border-b border-white" />
+                  <div className="border-b border-white" />
+                  <div className="border-r border-b border-white" />
+                  <div className="border-r border-b border-white" />
+                  <div className="border-b border-white" />
+                  <div className="border-r border-white" />
+                  <div className="border-r border-white" />
+                  <div />
+                </div>
+
+                {/* 4 Corner Resize Handles */}
+                <div
+                  onPointerDown={(e) => handleCropPointerDown(e, 'tl')}
+                  className="absolute -top-2 -left-2 w-5 h-5 bg-white border-2 border-brand-600 rounded-sm cursor-nwse-resize shadow-md"
+                />
+                <div
+                  onPointerDown={(e) => handleCropPointerDown(e, 'tr')}
+                  className="absolute -top-2 -right-2 w-5 h-5 bg-white border-2 border-brand-600 rounded-sm cursor-nesw-resize shadow-md"
+                />
+                <div
+                  onPointerDown={(e) => handleCropPointerDown(e, 'bl')}
+                  className="absolute -bottom-2 -left-2 w-5 h-5 bg-white border-2 border-brand-600 rounded-sm cursor-nesw-resize shadow-md"
+                />
+                <div
+                  onPointerDown={(e) => handleCropPointerDown(e, 'br')}
+                  className="absolute -bottom-2 -right-2 w-5 h-5 bg-white border-2 border-brand-600 rounded-sm cursor-nwse-resize shadow-md"
+                />
+              </div>
+
+              {/* Floating Crop Confirmation Bar */}
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-gray-900/90 border border-gray-700 px-3 py-1.5 rounded-2xl shadow-2xl backdrop-blur-md">
+                <button
+                  type="button"
+                  onClick={handleCancelCrop}
+                  className="px-3 py-1.5 text-xs font-semibold text-gray-300 hover:text-white rounded-xl hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApplyCrop}
+                  className="px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  <Check size={14} strokeWidth={3} /> Apply Crop
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* Floating Zoom Controls at Bottom-Right of Viewport */}
+        {!isCropping && (
+          <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-gray-900/85 backdrop-blur-md px-2 py-1 rounded-xl border border-gray-700 text-white shadow-xl z-20">
+            <button
+              type="button"
+              onClick={handleZoomOut}
+              disabled={zoomLevel <= 1}
+              className="p-1 hover:bg-white/15 rounded-lg text-gray-300 hover:text-white transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Zoom Out"
+            >
+              <ZoomOut size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={handleResetZoom}
+              className="px-2 py-0.5 text-xs font-mono font-bold text-gray-200 hover:text-white hover:bg-white/15 rounded-lg transition-colors cursor-pointer"
+              title="Reset Zoom (100%)"
+            >
+              {Math.round(zoomLevel * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={handleZoomIn}
+              disabled={zoomLevel >= 4}
+              className="p-1 hover:bg-white/15 rounded-lg text-gray-300 hover:text-white transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Zoom In"
+            >
+              <ZoomIn size={16} />
+            </button>
+            {zoomLevel > 1 && (
+              <button
+                type="button"
+                onClick={handleResetZoom}
+                className="p-1 hover:bg-white/15 rounded-lg text-gray-300 hover:text-white transition-colors cursor-pointer ml-0.5 border-l border-gray-700 pl-1.5"
+                title="Fit to Screen"
+              >
+                <Maximize2 size={14} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Bottom action buttons */}
+      {/* Bottom action buttons - Aligned with desktop page width (max-w-4xl) like the top bar */}
       <div
-        className="flex gap-3 p-3 bg-gray-800 border-t border-gray-700 flex-shrink-0"
+        className="bg-gray-800 border-t border-gray-700 p-3 flex-shrink-0"
         style={{
           paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
           paddingLeft: 'calc(12px + env(safe-area-inset-left, 0px))',
           paddingRight: 'calc(12px + env(safe-area-inset-right, 0px))',
         }}
       >
-        <button
-          onClick={onCancel}
-          className="flex-1 py-3 rounded-xl border border-gray-600 text-gray-300 font-semibold text-sm hover:bg-gray-700 transition-colors flex items-center justify-center gap-2"
-        >
-          <X size={16} /> Cancel
-        </button>
-        <button
-          onClick={handleSave}
-          className="sitepunch-btn-primary flex-1 py-3 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
-          style={{ background: 'var(--brand-button, #1d4ed8)' }}
-        >
-          <Check size={16} /> Save Photo
-        </button>
+        <div className="max-w-4xl mx-auto w-full flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex-1 sm:flex-initial sm:px-8 py-2.5 rounded-xl border border-gray-600 text-gray-300 font-semibold text-sm hover:bg-gray-700 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+          >
+            <X size={16} /> Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            className="sitepunch-btn-primary flex-1 sm:flex-initial sm:px-10 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+            style={{ background: 'var(--brand-button, #1d4ed8)' }}
+          >
+            <Check size={16} /> Save Photo
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -621,5 +1146,8 @@ function drawCloud(Fabric, ox, oy, x, y, stroke, strokeWidth) {
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
     selectable: false,
+    cornerColor: '#3b82f6',
+    cornerSize: 8,
+    transparentCorners: false,
   })
 }

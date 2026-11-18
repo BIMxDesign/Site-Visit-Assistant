@@ -25,6 +25,7 @@ import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ObservationStatusSelect from '../components/ObservationStatusSelect'
 import { truncateObservationTitle, formatDatePattern, normalizeObservationStatus } from '../utils/formatters'
+import { hexToRgb } from '../utils/theme'
 
 const PIN_SIZE = 28
 
@@ -54,6 +55,8 @@ export default function FloorPlanView() {
     setPendingPinInstanceObs,
     clearPendingPinInstanceObs,
   } = useAppStore()
+
+  const { r: pinR, g: pinG, b: pinB } = hexToRgb(pinColor)
 
   const containerRef = useRef(null)
 
@@ -130,22 +133,6 @@ export default function FloorPlanView() {
       getPhases(currentProjectUuid),
       getProject(currentProjectUuid),
     ])
-
-    // Auto-clean any abandoned blank observations (pins created without saved notes)
-    // to guarantee no blank observation notes or ghost pins form on the key plan
-    const allFpsItems = await getPunchItemsByFloorPlan(currentFloorPlanUuid)
-    const blankItems = allFpsItems.filter(i => {
-      const hasNotes = i.notes && i.notes.trim().length > 0
-      const isActivelyBeingCreated = showPunchForm && i.uuid === currentPunchItemUuid
-      return !hasNotes && !isActivelyBeingCreated
-    })
-
-    if (blankItems.length > 0) {
-      for (const b of blankItems) {
-        await db.photos.where('punchItemUuid').equals(b.uuid).delete()
-        await db.punchItems.where('uuid').equals(b.uuid).delete()
-      }
-    }
 
     // Always maintain continuous sequence across drawings in drawing order
     await resequenceReportPins({
@@ -585,9 +572,9 @@ export default function FloorPlanView() {
       phaseUuid: floorPlan?.phaseUuid,
       floorPlanUuid: currentFloorPlanUuid,
     })
-    await load()
     setCurrentPunchItem(uuid)
     openPunchForm()
+    await load()
   }
 
   async function handleAddObservationFromList() {
@@ -1369,7 +1356,7 @@ export default function FloorPlanView() {
             return (
               <div
                 data-no-canvas-click="true"
-                className="absolute top-4 left-1/2 -translate-x-1/2 z-40 text-white px-4 py-2.5 rounded-2xl shadow-2xl border border-white/20 flex items-center gap-3 animate-fade-in max-w-[92vw]"
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-40 text-white px-3.5 py-2 rounded-2xl shadow-2xl border border-white/20 flex items-center gap-2.5 sm:gap-3 animate-fade-in max-w-[94vw]"
                 style={{ background: 'var(--brand-header, #1e40af)' }}
               >
                 <div
@@ -1378,44 +1365,24 @@ export default function FloorPlanView() {
                 >
                   #{pendingPinInstanceObs.itemNumber}
                 </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-bold leading-tight truncate">
-                      Tap anywhere to place duplicate Pin #{pendingPinInstanceObs.itemNumber}
-                    </p>
-                    <span className="text-[10px] font-semibold bg-white/20 px-2 py-0.5 rounded-full flex-shrink-0">
-                      {count} on plan
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-white/80 leading-tight truncate">
-                    Tap to add more pins. Stop by pressing Esc or Cancel/Done.
-                  </p>
-                </div>
-                <div className="flex items-center gap-1.5 ml-1 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      clearPendingPinInstanceObs()
-                    }}
-                    className="px-3 py-1.5 bg-white/25 hover:bg-white/35 active:scale-95 rounded-xl text-xs font-bold cursor-pointer text-white flex items-center gap-1 shadow-xs transition-all"
-                    title="Done placing pin instances (or press Escape)"
-                  >
-                    <Check size={14} strokeWidth={2.5} />
-                    <span>Done</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      clearPendingPinInstanceObs()
-                    }}
-                    className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 active:scale-95 rounded-xl text-xs font-medium cursor-pointer text-white/85 hover:text-white transition-all"
-                    title="Cancel placing more pins (or press Escape)"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <span className="text-xs font-bold leading-tight truncate sm:whitespace-nowrap min-w-0">
+                  Tap anywhere to place duplicate
+                </span>
+                <span className="text-[10px] sm:text-[11px] font-semibold bg-white/20 px-2.5 py-1 rounded-full flex-shrink-0 whitespace-nowrap">
+                  {count} on plan
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    clearPendingPinInstanceObs()
+                  }}
+                  className="px-3 py-1.5 bg-white/25 hover:bg-white/35 active:scale-95 rounded-xl text-xs font-bold cursor-pointer text-white flex items-center gap-1 shadow-xs transition-all flex-shrink-0"
+                  title="Done placing pin instances (or press Escape)"
+                >
+                  <Check size={14} strokeWidth={2.5} />
+                  <span>Done</span>
+                </button>
               </div>
             )
           })()}
@@ -1530,11 +1497,6 @@ export default function FloorPlanView() {
                   </button>
                 )}
               </h2>
-              <p className="text-xs text-gray-500 mt-0.5 hidden sm:block">
-                {obsFilter === 'All'
-                  ? 'Drag ⋮⋮ with mouse or finger to reorder sequence'
-                  : `Filtered by ${obsFilter} (${filteredItems.length} of ${punchItems.length})`}
-              </p>
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -1674,100 +1636,163 @@ export default function FloorPlanView() {
                       setCurrentPunchItem(item.uuid)
                       openPunchForm()
                     }}
-                    className={`liquid-glass-card rounded-2xl p-3.5 flex items-center gap-3.5 cursor-pointer group transition-all select-none ${
+                    className={`liquid-glass-card rounded-2xl p-3.5 flex flex-col gap-2 cursor-pointer group transition-all select-none border border-l-4 ${
                       draggedObsUuid === item.uuid
                         ? 'opacity-40 border-dashed border-brand-400 scale-[0.98]'
                         : dragOverObsUuid === item.uuid
                           ? 'ring-2 ring-brand-400 scale-[1.01]'
                           : 'active:scale-[0.99] hover:shadow-md'
                     }`}
-                    style={{ borderLeft: '4px solid var(--punch-pin-color, #a40e26)' }}
+                    style={{
+                      borderLeftColor: pinColor || 'var(--punch-pin-color, #a40e26)',
+                      borderColor: `rgba(${pinR}, ${pinG}, ${pinB}, 0.35)`,
+                      background: `linear-gradient(135deg, rgba(${pinR}, ${pinG}, ${pinB}, 0.05) 0%, #ffffff 50%, rgba(${pinR}, ${pinG}, ${pinB}, 0.09) 100%)`,
+                      boxShadow: `0 4px 18px -2px rgba(${pinR}, ${pinG}, ${pinB}, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04)`,
+                    }}
                   >
-                    {/* Drag Grip Handle for Mouse and Touch / Finger */}
-                    <div
-                      className={`flex items-center justify-center p-1.5 -ml-1 text-gray-400 transition-colors ${
-                        obsFilter === 'All'
-                          ? 'hover:text-brand-600 active:text-brand-700 cursor-grab active:cursor-grabbing hover:bg-white/60'
-                          : 'cursor-not-allowed opacity-40'
-                      } flex-shrink-0 touch-none rounded-lg`}
-                      title={obsFilter === 'All' ? 'Drag with mouse or finger to reorder sequence' : 'Clear filter to reorder sequence'}
-                      style={{ touchAction: 'none' }}
-                      onPointerDown={(e) => obsFilter === 'All' && handleObsGripPointerDown(e, item.uuid, idx)}
-                      onPointerMove={obsFilter === 'All' ? handleObsGripPointerMove : undefined}
-                      onPointerUp={obsFilter === 'All' ? handleObsGripPointerUp : undefined}
-                      onTouchStart={(e) => obsFilter === 'All' && handleObsGripTouchStart(e, item.uuid, idx)}
-                      onTouchMove={obsFilter === 'All' ? handleObsGripTouchMove : undefined}
-                      onTouchEnd={obsFilter === 'All' ? handleObsGripTouchEnd : undefined}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <GripVertical size={20} className="block pointer-events-none" />
-                    </div>
+                    {/* Top Section: Grip, Pin #, Title & Core Details, Photo, Desktop Actions */}
+                    <div className="flex items-center gap-2.5 sm:gap-3.5 w-full">
+                      {/* Drag Grip Handle for Mouse and Touch / Finger */}
+                      <div
+                        className={`flex items-center justify-center p-1 sm:p-1.5 -ml-1 text-gray-400 transition-colors ${
+                          obsFilter === 'All'
+                            ? 'hover:text-brand-600 active:text-brand-700 cursor-grab active:cursor-grabbing hover:bg-white/60'
+                            : 'cursor-not-allowed opacity-40'
+                        } flex-shrink-0 touch-none rounded-lg`}
+                        title={obsFilter === 'All' ? 'Drag with mouse or finger to reorder sequence' : 'Clear filter to reorder sequence'}
+                        style={{ touchAction: 'none' }}
+                        onPointerDown={(e) => obsFilter === 'All' && handleObsGripPointerDown(e, item.uuid, idx)}
+                        onPointerMove={obsFilter === 'All' ? handleObsGripPointerMove : undefined}
+                        onPointerUp={obsFilter === 'All' ? handleObsGripPointerUp : undefined}
+                        onTouchStart={(e) => obsFilter === 'All' && handleObsGripTouchStart(e, item.uuid, idx)}
+                        onTouchMove={obsFilter === 'All' ? handleObsGripTouchMove : undefined}
+                        onTouchEnd={obsFilter === 'All' ? handleObsGripTouchEnd : undefined}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <GripVertical size={20} className="block pointer-events-none" />
+                      </div>
 
-                    {/* Pin Number Badge */}
-                    <div
-                      className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-sm text-white"
-                      style={{ background: pinColor || '#a40e26' }}
-                    >
-                      #{item.itemNumber}
-                    </div>
+                      {/* Pin Number Badge */}
+                      <div
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 shadow-sm text-white"
+                        style={{ background: pinColor || 'var(--punch-pin-color, #a40e26)' }}
+                      >
+                        {item.itemNumber}
+                      </div>
 
-                    {/* Content (Title, Badges, Trade, Due Date) */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="font-bold text-sm text-gray-900 truncate block min-w-0 flex-1 sm:flex-initial"
+                      {/* Content (Title, Badges, Trade, Due Date) */}
+                      <div className="flex-1 min-w-0">
+                        {/* Observation Title - prominent full width row, highly visible on phone views */}
+                        <h4
+                          className="font-bold text-sm text-gray-900 leading-snug line-clamp-2 sm:line-clamp-1 block"
                           title={item.title || item.notes || `Observation #${item.itemNumber}`}
                         >
-                          {truncateObservationTitle(item.title || item.notes || `Observation #${item.itemNumber}`, 60)}
-                        </span>
-                        <ObservationStatusSelect
-                          status={item.status}
-                          size="xs"
-                          onChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
-                        />
-                        {item.priority && (
-                          <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
-                            {item.priority}
+                          {truncateObservationTitle(item.title || item.notes || `Observation #${item.itemNumber}`, 80)}
+                        </h4>
+
+                        {/* Badges Row: Status dropdown, Priority, Extra Pins */}
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                          <ObservationStatusSelect
+                            status={item.status}
+                            size="xs"
+                            onChange={(nextStatus) => handleObservationStatusChange(item, nextStatus)}
+                          />
+                          {item.priority && (
+                            <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${PRIORITY_BADGES[item.priority] || 'bg-gray-100 text-gray-600'}`}>
+                              {item.priority}
+                            </span>
+                          )}
+                          {item.extraPins?.length > 0 && (
+                            <span className="text-[10px] font-semibold text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                              {item.extraPins.length + 1} pins
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Secondary Details: Category, Due Date, Assignee */}
+                        <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 flex-wrap">
+                          <span className="font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md flex items-center gap-1.5 flex-wrap text-[11px]">
+                            <span>Category: {item.trade || 'General'}</span>
+                            <span className="text-gray-400">•</span>
+                            <span className="flex items-center gap-1 text-gray-500">
+                              <Calendar size={11} className="text-gray-400" />
+                              <span>{item.dueDate ? `Due: ${formatDatePattern(item.dueDate)}` : 'No Due Date'}</span>
+                            </span>
                           </span>
-                        )}
-                        {item.extraPins?.length > 0 && (
-                          <span className="text-[10px] font-semibold text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                            {item.extraPins.length + 1} pins
-                          </span>
+                          {item.assignedTo && (
+                            <span className="flex items-center gap-1 text-gray-500 font-medium text-[11px]">
+                              <User size={11} /> {item.assignedTo}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Photo Thumbnail on right side */}
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl overflow-hidden flex-shrink-0 border-2 border-gray-300 shadow-xs flex items-center justify-center self-center">
+                        {photo ? (
+                          <img src={photo} alt={`Pin #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
+                        ) : (
+                          <Camera size={20} className="text-gray-300" />
                         )}
                       </div>
 
-                      {item.notes && item.title && (
-                        <p className="text-xs text-gray-600 line-clamp-1 mt-0.5 truncate">{item.notes}</p>
-                      )}
-
-                      <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 flex-wrap">
-                        <span className="font-medium text-gray-600 bg-gray-100 px-2.5 py-0.5 rounded-md flex items-center gap-1.5 flex-wrap">
-                          <span>Category: {item.trade || 'General'}</span>
-                          <span className="text-gray-400">•</span>
-                          <span className="flex items-center gap-1 text-gray-500">
-                            <Calendar size={11} className="text-gray-400" />
-                            <span>{item.dueDate ? `Due: ${formatDatePattern(item.dueDate)}` : 'No Due Date'}</span>
-                          </span>
-                        </span>
-                        {item.assignedTo && (
-                          <span className="flex items-center gap-1 text-gray-500 font-medium">
-                            <User size={11} /> {item.assignedTo}
-                          </span>
-                        )}
+                      {/* Desktop Action Buttons: Move Up / Down, Edit, Delete (hidden on mobile, shown on sm+) */}
+                      <div className="hidden sm:flex items-center gap-1 flex-shrink-0 self-center">
+                        <div className="flex flex-col mr-1 border-r border-gray-200 pr-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleMoveObservation(item.uuid, 'up')
+                            }}
+                            disabled={idx === 0 || obsFilter !== 'All'}
+                            className={`p-1 rounded transition-colors cursor-pointer ${idx > 0 && obsFilter === 'All' ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
+                            title={obsFilter === 'All' ? 'Move observation up (updates sequence)' : 'Clear filter to reorder'}
+                          >
+                            <ChevronUp size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleMoveObservation(item.uuid, 'down')
+                            }}
+                            disabled={idx === sortedItems.length - 1 || obsFilter !== 'All'}
+                            className={`p-1 rounded transition-colors cursor-pointer ${idx < sortedItems.length - 1 && obsFilter === 'All' ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
+                            title={obsFilter === 'All' ? 'Move observation down (updates sequence)' : 'Clear filter to reorder'}
+                          >
+                            <ChevronDown size={14} />
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setCurrentPunchItem(item.uuid)
+                            openPunchForm()
+                          }}
+                          className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
+                          title="Edit observation"
+                        >
+                          <Edit2 size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteItem(item)
+                          }}
+                          className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-600 flex items-center justify-center cursor-pointer transition-colors"
+                          title="Delete observation (auto-resequences pins)"
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </div>
                     </div>
 
-                    {/* Photo Thumbnail moved to the Right Side (green box location) */}
-                    {photo ? (
-                      <div className="w-14 h-14 rounded-xl overflow-hidden border border-gray-200 flex-shrink-0 bg-gray-100 shadow-2xs">
-                        <img src={photo} alt={`Pin #${item.itemNumber}`} className="w-full h-full object-cover pointer-events-none" />
-                      </div>
-                    ) : null}
-
-                    {/* Action Buttons: Move Up / Down, Edit, Delete */}
-                    <div className="flex items-center gap-1 flex-shrink-0 self-center">
-                      <div className="flex flex-col mr-1 border-r border-gray-200 pr-1">
+                    {/* Mobile Action Footer Bar: Touch-friendly Up/Down, Edit, Delete (strictly on phones < sm) */}
+                    <div className="flex sm:hidden items-center justify-between pt-2 border-t border-gray-150/80 mt-1 pl-10 pr-0.5">
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={(e) => {
@@ -1775,10 +1800,11 @@ export default function FloorPlanView() {
                             handleMoveObservation(item.uuid, 'up')
                           }}
                           disabled={idx === 0 || obsFilter !== 'All'}
-                          className={`p-1 rounded transition-colors cursor-pointer ${idx > 0 && obsFilter === 'All' ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-                          title={obsFilter === 'All' ? 'Move observation up (updates sequence)' : 'Clear filter to reorder'}
+                          className={`p-1 px-2 rounded-lg border border-gray-250 bg-white transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold ${idx > 0 && obsFilter === 'All' ? 'text-gray-700 hover:text-brand-600 active:bg-gray-100' : 'text-gray-300 cursor-not-allowed opacity-50'}`}
+                          title={obsFilter === 'All' ? 'Move observation up' : 'Clear filter to reorder'}
                         >
-                          <ChevronUp size={14} />
+                          <ChevronUp size={13} />
+                          <span>Up</span>
                         </button>
                         <button
                           type="button"
@@ -1787,35 +1813,40 @@ export default function FloorPlanView() {
                             handleMoveObservation(item.uuid, 'down')
                           }}
                           disabled={idx === sortedItems.length - 1 || obsFilter !== 'All'}
-                          className={`p-1 rounded transition-colors cursor-pointer ${idx < sortedItems.length - 1 && obsFilter === 'All' ? 'text-gray-500 hover:text-brand-600 hover:bg-white/60' : 'text-gray-200 cursor-not-allowed'}`}
-                          title={obsFilter === 'All' ? 'Move observation down (updates sequence)' : 'Clear filter to reorder'}
+                          className={`p-1 px-2 rounded-lg border border-gray-250 bg-white transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold ${idx < sortedItems.length - 1 && obsFilter === 'All' ? 'text-gray-700 hover:text-brand-600 active:bg-gray-100' : 'text-gray-300 cursor-not-allowed opacity-50'}`}
+                          title={obsFilter === 'All' ? 'Move observation down' : 'Clear filter to reorder'}
                         >
-                          <ChevronDown size={14} />
+                          <ChevronDown size={13} />
+                          <span>Down</span>
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setCurrentPunchItem(item.uuid)
-                          openPunchForm()
-                        }}
-                        className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-brand-600 flex items-center justify-center cursor-pointer transition-colors"
-                        title="Edit observation"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDeleteItem(item)
-                        }}
-                        className="liquid-pill p-1.5 rounded-xl text-gray-400 hover:text-red-600 flex items-center justify-center cursor-pointer transition-colors"
-                        title="Delete observation (auto-resequences pins)"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setCurrentPunchItem(item.uuid)
+                            openPunchForm()
+                          }}
+                          className="p-1 px-2.5 rounded-lg border border-gray-250 bg-white text-gray-700 hover:text-brand-700 flex items-center gap-1 text-[11px] font-semibold cursor-pointer active:bg-gray-100 shadow-2xs"
+                          title="Edit observation"
+                        >
+                          <Edit2 size={13} />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteItem(item)
+                          }}
+                          className="p-1 px-2 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 flex items-center gap-1 text-[11px] font-semibold cursor-pointer active:bg-red-100 shadow-2xs"
+                          title="Delete observation"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )

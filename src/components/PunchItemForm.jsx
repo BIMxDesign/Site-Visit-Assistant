@@ -3,7 +3,7 @@ import {
   X, Camera, Mic, MicOff, Trash2, Image as ImageIcon,
   Plus, Check, Edit2, AlertCircle, Tag, ArrowLeft, Lock, Copy,
   ChevronLeft, ChevronRight, MapPin, Search, ChevronDown, ChevronUp,
-  Bold, List, ListOrdered, Clock
+  Bold, Italic, Underline, List, ListOrdered, Clock, GripVertical
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -24,10 +24,32 @@ import {
 import { ModalOverlay, ModalHeader, Field, INPUT, Spinner } from './NewProjectModal'
 import PhotoAnnotator from './PhotoAnnotator'
 import { v4 as uuidv4 } from 'uuid'
-import { OBSERVATION_STATUSES, normalizeObservationStatus } from '../utils/formatters'
+import { OBSERVATION_STATUSES, normalizeObservationStatus, stripHtmlToPlainText } from '../utils/formatters'
 import { preparePhotoForQuality, getStoredPhotoQuality, readFileAsDataUrl } from '../utils/media'
 
 const PRIORITIES = ['Low', 'Medium', 'High', 'Critical']
+
+export function notesToHtml(notes) {
+  if (!notes) return ''
+  let html = String(notes)
+
+  // If already contains HTML markup, return it
+  if (/<(b|i|u|strong|em|ul|ol|li|p|div|br)\b/i.test(html)) {
+    return html
+  }
+
+  // Convert markdown to HTML:
+  // **bold** -> <b>bold</b>
+  html = html.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+  // *italic* -> <i>italic</i>
+  html = html.replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<i>$1</i>')
+  // __underline__ -> <u>underline</u>
+  html = html.replace(/__(.*?)__/g, '<u>$1</u>')
+  // Newlines -> <br>
+  html = html.replace(/\r?\n/g, '<br>')
+
+  return html
+}
 
 export default function PunchItemForm() {
   const {
@@ -44,6 +66,7 @@ export default function PunchItemForm() {
   } = useAppStore()
 
   const [item,        setItem]        = useState(null)
+  const [loadError,   setLoadError]   = useState(false)
   const [photos,      setPhotos]      = useState([])
   const [saving,      setSaving]      = useState(false)
   const [deletingPin, setDeletingPin] = useState(false)
@@ -59,15 +82,14 @@ export default function PunchItemForm() {
   const [showReuseDropdown, setShowReuseDropdown] = useState(false)
   const reuseDropdownRef = useRef(null)
 
-  // Observation Notes Text Formatting & Always CAPS LOCK
-  const [isCapsLock, setIsCapsLock] = useState(() => {
-    try {
-      return localStorage.getItem('punchapp_notes_caps_lock') === 'true'
-    } catch {
-      return false
-    }
-  })
-  const textareaRef = useRef(null)
+  // Observation Notes Rich Text Editor
+  const editorRef = useRef(null)
+  const [activeStyles, setActiveStyles] = useState({ bold: false, italic: false, underline: false })
+
+  // Observation Photos Drag & Drop Reordering
+  const [draggedPhotoUuid, setDraggedPhotoUuid] = useState(null)
+  const [dragOverPhotoUuid, setDragOverPhotoUuid] = useState(null)
+  const photoDragRef = useRef(null)
 
   // Lists
   const [trades,            setTrades]            = useState([])
@@ -126,21 +148,36 @@ export default function PunchItemForm() {
   // Load punch item data
   const loadInitialData = useCallback(async () => {
     if (!currentPunchItemUuid) return
-    const it = await getPunchItem(currentPunchItemUuid)
-    if (!it) return
+    setLoadError(false)
+    let it = await getPunchItem(currentPunchItemUuid)
+    if (!it) {
+      // Retry in case database transaction is settling
+      for (let attempt = 0; attempt < 5 && !it; attempt++) {
+        await new Promise(r => setTimeout(r, 80))
+        it = await getPunchItem(currentPunchItemUuid)
+      }
+    }
+    if (!it) {
+      setLoadError(true)
+      return
+    }
+    const notesHtml = notesToHtml(it.notes || '')
     setItem(it)
     itemRef.current = it
     hadNotesInitiallyRef.current = !!(it.notes && it.notes.trim().length > 0)
     isSavedRef.current = false
     setForm({
       title:      it.title      || '',
-      notes:      it.notes      || '',
+      notes:      notesHtml,
       trade:      it.trade      || 'General',
       priority:   it.priority   || 'Medium',
       status:     normalizeObservationStatus(it.status),
       assignedTo: it.assignedTo || '',
       dueDate:    it.dueDate    || '',
     })
+    if (editorRef.current) {
+      editorRef.current.innerHTML = notesHtml
+    }
     const ph = await getPhotos(it.uuid)
     setPhotos(ph)
     initialLoadedUuid.current = currentPunchItemUuid
@@ -215,6 +252,16 @@ export default function PunchItemForm() {
     }
   }, [currentPunchItemUuid, loadInitialData])
 
+  // Set initial content into rich text editor once mounted or when switching observations
+  useEffect(() => {
+    if (editorRef.current && item) {
+      const targetHtml = notesToHtml(item.notes || '')
+      if (editorRef.current.innerHTML !== targetHtml) {
+        editorRef.current.innerHTML = targetHtml
+      }
+    }
+  }, [item?.uuid])
+
   // Current position among sibling observations
   const currentIndex = siblings.findIndex(s => s.uuid === (item?.uuid || currentPunchItemUuid))
   const hasPrev = currentIndex > 0
@@ -232,7 +279,8 @@ export default function PunchItemForm() {
     }
 
     // Auto-save active changes if notes are present
-    if (item && form.notes && form.notes.trim()) {
+    const plainNotes = stripHtmlToPlainText(form.notes || '')
+    if (item && plainNotes) {
       try {
         await savePunchItem({ ...item, ...form })
       } catch (err) {
@@ -312,135 +360,107 @@ export default function PunchItemForm() {
     }
   }, [])
 
-  // Toggle CAPS LOCK mode (persisted to localStorage)
-  const toggleCapsLock = () => {
-    setIsCapsLock(prev => {
-      const next = !prev
-      try {
-        localStorage.setItem('punchapp_notes_caps_lock', String(next))
-      } catch {}
-      if (next && form.notes) {
-        set('notes', form.notes.toUpperCase())
-      }
-      return next
-    })
-  }
+  // Update toolbar active formatting indicators (bold, italic, underline)
+  const updateActiveStyles = useCallback(() => {
+    try {
+      setActiveStyles({
+        bold: Boolean(document.queryCommandState && document.queryCommandState('bold')),
+        italic: Boolean(document.queryCommandState && document.queryCommandState('italic')),
+        underline: Boolean(document.queryCommandState && document.queryCommandState('underline')),
+      })
+    } catch (_) {}
+  }, [])
 
-  // Handle typing inside notes textarea with optional always-caps enforcement
-  const handleNotesChange = (e) => {
-    let val = e.target.value
-    if (isCapsLock) {
-      val = val.toUpperCase()
-    }
-    set('notes', val)
-  }
+  // Sync editor content with form state
+  const handleEditorInput = useCallback(() => {
+    if (!editorRef.current) return
+    const html = editorRef.current.innerHTML
+    const plain = (editorRef.current.innerText || '').trim()
+    setError('')
+    setForm(f => ({ ...f, notes: plain ? html : '' }))
+    updateActiveStyles()
+  }, [updateActiveStyles])
 
-  // Text formatting actions (bold, bullets, numbering, timestamps, case transforms)
-  const applyTextFormatting = (type) => {
-    const el = textareaRef.current
-    const currentNotes = form.notes || ''
-    if (!el) {
-      if (type === 'uppercase') set('notes', currentNotes.toUpperCase())
-      if (type === 'lowercase') set('notes', currentNotes.toLowerCase())
-      if (type === 'sentence') {
-        const sentence = currentNotes.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase())
-        set('notes', sentence)
-      }
-      return
-    }
-
-    const start = el.selectionStart || 0
-    const end = el.selectionEnd || 0
-    const selected = currentNotes.slice(start, end)
-    let replacement = ''
-    let newCursorStart = start
-    let newCursorEnd = end
-
-    if (type === 'uppercase') {
-      const converted = currentNotes.toUpperCase()
-      set('notes', converted)
-      return
-    }
-    if (type === 'lowercase') {
-      const converted = currentNotes.toLowerCase()
-      set('notes', converted)
-      return
-    }
-    if (type === 'sentence') {
-      const sentence = currentNotes.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase())
-      set('notes', sentence)
-      return
-    }
+  // Rich Text Formatting Actions (Bold, Italic, Underline, Bullet Lists, Numbered Lists, Timestamp)
+  const applyFormatting = useCallback((type) => {
+    const el = editorRef.current
+    if (!el) return
+    el.focus()
 
     if (type === 'bold') {
-      if (selected) {
-        replacement = `**${selected}**`
-        newCursorStart = start
-        newCursorEnd = start + replacement.length
-      } else {
-        replacement = `**BOLD TEXT**`
-        newCursorStart = start + 2
-        newCursorEnd = start + 11
-      }
+      document.execCommand('bold', false, null)
+    } else if (type === 'italic') {
+      document.execCommand('italic', false, null)
+    } else if (type === 'underline') {
+      document.execCommand('underline', false, null)
     } else if (type === 'bullet') {
-      if (selected) {
-        const lines = selected.split('\n')
-        replacement = lines.map(l => l.startsWith('• ') ? l.replace(/^•\s*/, '') : `• ${l}`).join('\n')
-        newCursorStart = start
-        newCursorEnd = start + replacement.length
-      } else {
-        const needsNewline = start > 0 && currentNotes[start - 1] !== '\n' ? '\n' : ''
-        replacement = `${needsNewline}• `
-        newCursorStart = start + replacement.length
-        newCursorEnd = newCursorStart
-      }
+      document.execCommand('insertUnorderedList', false, null)
     } else if (type === 'number') {
-      if (selected) {
-        const lines = selected.split('\n')
-        replacement = lines.map((l, i) => `${i + 1}. ${l.replace(/^\d+\.\s*/, '')}`).join('\n')
-        newCursorStart = start
-        newCursorEnd = start + replacement.length
-      } else {
-        const needsNewline = start > 0 && currentNotes[start - 1] !== '\n' ? '\n' : ''
-        replacement = `${needsNewline}1. `
-        newCursorStart = start + replacement.length
-        newCursorEnd = newCursorStart
-      }
+      document.execCommand('insertOrderedList', false, null)
     } else if (type === 'timestamp') {
       const now = new Date()
-      const stamp = `[${now.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' })} ${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}] `
-      replacement = stamp
-      newCursorStart = start + replacement.length
-      newCursorEnd = newCursorStart
+      const timeStr = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      const dateStr = now.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' })
+      const stamp = `[${dateStr} ${timeStr}] `
+      document.execCommand('insertText', false, stamp)
     }
 
-    let nextText = currentNotes.slice(0, start) + replacement + currentNotes.slice(end)
-    if (isCapsLock) nextText = nextText.toUpperCase()
-    set('notes', nextText)
+    handleEditorInput()
+    updateActiveStyles()
+  }, [handleEditorInput, updateActiveStyles])
 
-    setTimeout(() => {
-      if (el) {
-        el.focus()
-        el.setSelectionRange(newCursorStart, newCursorEnd)
+  // Case Conversion on Selection or Full Text
+  const applyCaseConversion = useCallback((caseType) => {
+    const el = editorRef.current
+    if (!el) return
+    el.focus()
+
+    const transform = (str) => {
+      if (caseType === 'uppercase') return str.toUpperCase()
+      if (caseType === 'lowercase') return str.toLowerCase()
+      if (caseType === 'sentence') return str.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase())
+      if (caseType === 'title') return str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+      return str
+    }
+
+    const sel = window.getSelection()
+    const selectedText = sel ? sel.toString() : ''
+
+    if (selectedText && selectedText.trim()) {
+      document.execCommand('insertText', false, transform(selectedText))
+      handleEditorInput()
+    } else {
+      const fullText = el.innerText
+      if (fullText) {
+        el.innerText = transform(fullText)
+        handleEditorInput()
       }
-    }, 0)
-  }
+    }
+  }, [handleEditorInput])
 
   // Reuse previous observation note: Keep text already inside box and append copied text after that!
   const handleSelectReuseNote = (found) => {
     if (!found) return
-    setForm(prev => {
-      const existing = (prev.notes || '').trim()
-      let addition = (found.notes || '').trim()
-      if (isCapsLock) addition = addition.toUpperCase()
-      const merged = existing ? `${existing}\n${addition}` : addition
-      return {
-        ...prev,
-        notes: merged,
-        trade: (prev.trade === 'General' || !prev.trade) && found.trade ? found.trade : prev.trade,
-        priority: (prev.priority === 'Medium' || !prev.priority) && found.priority ? found.priority : prev.priority,
-      }
-    })
+    const incomingHtml = notesToHtml(found.notes || '')
+    if (editorRef.current) {
+      editorRef.current.focus()
+      const existing = editorRef.current.innerHTML.trim()
+      const merged = existing ? `${existing}<br>${incomingHtml}` : incomingHtml
+      editorRef.current.innerHTML = merged
+      handleEditorInput()
+    } else {
+      setForm(prev => {
+        const existing = (prev.notes || '').trim()
+        const addition = incomingHtml.trim()
+        const merged = existing ? `${existing}<br>${addition}` : addition
+        return {
+          ...prev,
+          notes: merged,
+          trade: (prev.trade === 'General' || !prev.trade) && found.trade ? found.trade : prev.trade,
+          priority: (prev.priority === 'Medium' || !prev.priority) && found.priority ? found.priority : prev.priority,
+        }
+      })
+    }
     setError('')
     setShowReuseDropdown(false)
     setReuseSearch('')
@@ -448,6 +468,97 @@ export default function PunchItemForm() {
     setTimeout(() => {
       setReusedSuccessMsg('')
     }, 3500)
+  }
+
+  // ── Observation Photos Drag & Drop Rearranging ─────────────────────────────
+  const handleReorderPhotos = async (sourceUuid, targetUuid) => {
+    if (!sourceUuid || !targetUuid || sourceUuid === targetUuid) return
+    const currentList = [...photos]
+    const fromIdx = currentList.findIndex(p => p.uuid === sourceUuid)
+    const toIdx = currentList.findIndex(p => p.uuid === targetUuid)
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
+
+    const [moved] = currentList.splice(fromIdx, 1)
+    currentList.splice(toIdx, 0, moved)
+
+    setPhotos(currentList)
+
+    for (let i = 0; i < currentList.length; i++) {
+      await db.photos.where('uuid').equals(currentList[i].uuid).modify({
+        order: i,
+      })
+    }
+  }
+
+  const handlePhotoDragStart = (e, uuid) => {
+    e.dataTransfer.setData('text/plain', uuid)
+    setDraggedPhotoUuid(uuid)
+  }
+
+  const handlePhotoDragOver = (e, uuid) => {
+    e.preventDefault()
+    if (draggedPhotoUuid && draggedPhotoUuid !== uuid) {
+      setDragOverPhotoUuid(uuid)
+    }
+  }
+
+  const handlePhotoDrop = async (e, targetUuid) => {
+    e.preventDefault()
+    const sourceUuid = e.dataTransfer.getData('text/plain') || draggedPhotoUuid
+    setDraggedPhotoUuid(null)
+    setDragOverPhotoUuid(null)
+    if (sourceUuid && targetUuid && sourceUuid !== targetUuid) {
+      await handleReorderPhotos(sourceUuid, targetUuid)
+    }
+  }
+
+  const handlePhotoDragEnd = () => {
+    setDraggedPhotoUuid(null)
+    setDragOverPhotoUuid(null)
+  }
+
+  // Mobile & iPad Touch / Pointer Dragging for Photos
+  const handlePhotoPointerDown = (e, uuid, index) => {
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch (_) {}
+    photoDragRef.current = {
+      pointerId: e.pointerId,
+      uuid,
+      index,
+      startX: e.clientX,
+      hasMoved: false,
+    }
+  }
+
+  const handlePhotoPointerMove = (e) => {
+    if (!photoDragRef.current) return
+    const dx = Math.abs(e.clientX - photoDragRef.current.startX)
+    if (!photoDragRef.current.hasMoved && dx > 8) {
+      photoDragRef.current.hasMoved = true
+      setDraggedPhotoUuid(photoDragRef.current.uuid)
+    }
+    if (!photoDragRef.current.hasMoved) return
+
+    const elem = document.elementFromPoint(e.clientX, e.clientY)
+    const card = elem?.closest('[data-photo-uuid]')
+    if (card) {
+      const targetUuid = card.getAttribute('data-photo-uuid')
+      if (targetUuid && targetUuid !== photoDragRef.current.uuid) {
+        setDragOverPhotoUuid(targetUuid)
+      }
+    }
+  }
+
+  const handlePhotoPointerUp = async () => {
+    if (!photoDragRef.current) return
+    const { uuid, hasMoved } = photoDragRef.current
+    const targetUuid = dragOverPhotoUuid
+    photoDragRef.current = null
+    setDraggedPhotoUuid(null)
+    setDragOverPhotoUuid(null)
+
+    if (hasMoved && targetUuid && targetUuid !== uuid) {
+      await handleReorderPhotos(uuid, targetUuid)
+    }
   }
 
   // ── Custom Trade Management ────────────────────────────────────────────────
@@ -535,7 +646,8 @@ export default function PunchItemForm() {
   async function handleSave() {
     if (!item) return
 
-    if (!form.notes.trim()) {
+    const plainNotes = stripHtmlToPlainText(form.notes || '')
+    if (!plainNotes) {
       setError('Observation notes are compulsory. Please add notes before saving.')
       return
     }
@@ -571,10 +683,11 @@ export default function PunchItemForm() {
 
   // Cancel and discard unsaved newly dropped pin so no blank pin remains on key plan
   const handleCancel = async () => {
-    if (item && !hadNotesInitiallyRef.current && !isSavedRef.current) {
+    const currentItem = item || itemRef.current
+    if (currentItem && !hadNotesInitiallyRef.current && !isSavedRef.current) {
       isSavedRef.current = true
       try {
-        await deletePunchItem(item.uuid)
+        await deletePunchItem(currentItem.uuid)
       } catch (err) {
         console.error('Failed to clean up unsaved blank pin:', err)
       }
@@ -582,27 +695,23 @@ export default function PunchItemForm() {
     closePunchForm()
   }
 
-  // Cleanup on unmount: if modal is dismissed or closed without saving notes for a newly placed pin
-  useEffect(() => {
-    return () => {
-      if (itemRef.current && !hadNotesInitiallyRef.current && !isSavedRef.current) {
-        deletePunchItem(itemRef.current.uuid).catch(err => {
-          console.warn('Cleanup of unsaved blank observation pin failed:', err)
-        })
-      }
-    }
-  }, [])
-
   // ── Voice to text (Robust, continuous, multi-platform) ───────────────────
   function appendSpeechToNotes(text) {
-    let clean = (text || '').trim()
+    const clean = (text || '').trim()
     if (!clean) return
-    if (isCapsLock) clean = clean.toUpperCase()
-    setForm(prev => {
-      const current = (prev.notes || '').trim()
-      if (!current) return { ...prev, notes: clean }
-      return { ...prev, notes: `${current} ${clean}` }
-    })
+    if (editorRef.current) {
+      editorRef.current.focus()
+      const cur = editorRef.current.innerHTML.trim()
+      const sep = cur && !cur.endsWith(' ') && !cur.endsWith('<br>') ? ' ' : ''
+      document.execCommand('insertText', false, `${sep}${clean}`)
+      handleEditorInput()
+    } else {
+      setForm(prev => {
+        const current = (prev.notes || '').trim()
+        if (!current) return { ...prev, notes: clean }
+        return { ...prev, notes: `${current} ${clean}` }
+      })
+    }
   }
 
   function stopVoiceSession() {
@@ -623,13 +732,17 @@ export default function PunchItemForm() {
     setListening(false)
 
     if (recognitionRef.current) {
-      try {
-        recognitionRef.current.onresult = null
-        recognitionRef.current.onerror = null
-        recognitionRef.current.onend = null
-        recognitionRef.current.stop()
-      } catch {}
+      const rec = recognitionRef.current
       recognitionRef.current = null
+      try {
+        rec.onstart = null
+        rec.onresult = null
+        rec.onerror = null
+        rec.onend = null
+        rec.abort()
+      } catch (e) {
+        console.warn('Error aborting speech recognition:', e)
+      }
     }
   }
 
@@ -646,12 +759,14 @@ export default function PunchItemForm() {
     // Clean up any lingering previous instance before starting fresh
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.onresult = null
-        recognitionRef.current.onerror = null
-        recognitionRef.current.onend = null
-        recognitionRef.current.abort()
+        const oldRec = recognitionRef.current
+        recognitionRef.current = null
+        oldRec.onstart = null
+        oldRec.onresult = null
+        oldRec.onerror = null
+        oldRec.onend = null
+        oldRec.abort()
       } catch {}
-      recognitionRef.current = null
     }
 
     try {
@@ -862,7 +977,8 @@ export default function PunchItemForm() {
 
   // ── Extra Pin Instances Handling ───────────────────────────────────────────
   async function handleStartAddPinInstance() {
-    if (!form.notes || !form.notes.trim()) {
+    const plainNotes = stripHtmlToPlainText(form.notes || '')
+    if (!plainNotes) {
       setError('Please enter Observation Notes first before placing extra pin instances.')
       return
     }
@@ -911,13 +1027,67 @@ export default function PunchItemForm() {
     return notesMatch || itemNumMatch || tradeMatch
   })
 
-  if (!item) return (
-    <ModalOverlay onClose={handleCancel}>
-      <div className="bg-white rounded-t-2xl p-8 flex items-center justify-center">
-        <Spinner />
-      </div>
-    </ModalOverlay>
-  )
+  if (!item) {
+    return (
+      <ModalOverlay onClose={handleCancel}>
+        <div className="w-full h-full flex flex-col flex-1 overflow-hidden bg-gray-50">
+          <header
+            className="sitepunch-header bg-brand-800 text-white shadow-lg flex-shrink-0"
+            style={{
+              background: 'var(--brand-header, #1e40af)',
+              paddingTop: 'calc(14px + env(safe-area-inset-top, 0px))',
+              paddingBottom: '14px',
+              paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
+              paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
+            }}
+          >
+            <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full">
+              <div className="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="liquid-glass-btn min-w-[40px] min-h-[40px] p-2 -ml-1 rounded-xl text-white transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
+                  aria-label="Back"
+                  title="Back"
+                >
+                  <ArrowLeft size={20} className="block" />
+                </button>
+                <div className="flex flex-col justify-center min-w-0">
+                  <h1 className="text-xl font-bold tracking-tight leading-tight truncate">
+                    {loadError ? 'Observation Not Found' : 'Loading Observation…'}
+                  </h1>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+            {loadError ? (
+              <div className="flex flex-col items-center gap-3 max-w-sm">
+                <AlertCircle size={40} className="text-amber-500" />
+                <p className="text-sm font-semibold text-gray-800">
+                  This observation could not be loaded or may have been removed.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="mt-2 px-5 py-2.5 bg-brand-700 hover:bg-brand-800 text-white font-semibold text-xs rounded-xl shadow-md cursor-pointer transition-colors"
+                  style={{ background: 'var(--brand-button, #1d4ed8)' }}
+                >
+                  Return to Key Plan
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-3 border-brand-600 border-t-transparent rounded-full animate-spin" />
+                <p className="text-xs font-semibold text-gray-600">Loading observation details…</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </ModalOverlay>
+    )
+  }
 
   return (
     <>
@@ -1024,16 +1194,43 @@ export default function PunchItemForm() {
               )}
 
               {/* Photos - Center Aligned */}
-              <div className="flex flex-col items-center text-center">
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block">
-                  Photos ({photos.length} / {MAX_PHOTOS})
-                </label>
+              <div
+                className="flex flex-col items-center text-center"
+                onPointerMove={handlePhotoPointerMove}
+                onPointerUp={handlePhotoPointerUp}
+                onPointerCancel={handlePhotoPointerUp}
+              >
+                <div className="flex items-center justify-between w-full max-w-md px-1 mb-1.5">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block">
+                    Photos ({photos.length} / {MAX_PHOTOS})
+                  </label>
+                  {photos.length > 1 && (
+                    <span className="text-[11px] text-gray-400 font-medium select-none">
+                      Drag photos to rearrange
+                    </span>
+                  )}
+                </div>
 
                 <div className="flex items-center justify-center gap-3 mt-1 flex-wrap w-full">
-                  {photos.map(ph => (
-                    <div key={ph.uuid} className="w-24 h-24 sm:w-28 sm:h-28 flex-shrink-0">
+                  {photos.map((ph, idx) => (
+                    <div
+                      key={ph.uuid}
+                      data-photo-uuid={ph.uuid}
+                      draggable
+                      onDragStart={(e) => handlePhotoDragStart(e, ph.uuid)}
+                      onDragOver={(e) => handlePhotoDragOver(e, ph.uuid)}
+                      onDrop={(e) => handlePhotoDrop(e, ph.uuid)}
+                      onDragEnd={handlePhotoDragEnd}
+                      className={`w-24 h-24 sm:w-28 sm:h-28 flex-shrink-0 transition-all duration-150 ${
+                        draggedPhotoUuid === ph.uuid ? 'opacity-40 scale-95' : ''
+                      } ${
+                        dragOverPhotoUuid === ph.uuid ? 'ring-2 ring-brand-500 rounded-xl scale-105' : ''
+                      }`}
+                    >
                       <PhotoThumb
                         photo={ph}
+                        index={idx + 1}
+                        onGripPointerDown={(e) => handlePhotoPointerDown(e, ph.uuid, idx)}
                         onEdit={() => handleStartEditPhoto(ph)}
                         onDelete={() => handleDeletePhoto(ph.uuid)}
                       />
@@ -1077,82 +1274,103 @@ export default function PunchItemForm() {
               <div className="relative">
                 {/* Text Formatting & Case Conversion Toolbar */}
                 <div className="bg-gray-50 border border-gray-200 border-b-0 rounded-t-xl px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-1.5 select-none">
-                  <div className="flex flex-wrap items-center gap-1">
-                    {/* Always CAPS LOCK Toggle */}
-                    <button
-                      type="button"
-                      onClick={toggleCapsLock}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
-                        isCapsLock
-                          ? 'bg-brand-600 text-white ring-2 ring-brand-300'
-                          : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-250'
-                      }`}
-                      title={isCapsLock ? 'CAPS LOCK is ON: Everything typed will be in UPPERCASE. Click to toggle OFF.' : 'Click to enable always CAPS LOCK while typing'}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {/* Combined Case Selection Dropdown */}
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          applyCaseConversion(e.target.value)
+                          e.target.value = ''
+                        }
+                      }}
+                      className="bg-white hover:bg-gray-100 text-gray-700 text-[11px] font-medium px-2 py-1 rounded-lg border border-gray-250 cursor-pointer focus:outline-none shadow-2xs transition-colors"
+                      title="Change text case"
                     >
-                      <span className="font-mono font-black text-[11px] px-1 py-0.2 bg-black/10 rounded">AA</span>
-                      <span>CAPS LOCK</span>
-                      <span className={`w-2 h-2 rounded-full ${isCapsLock ? 'bg-emerald-300 animate-pulse' : 'bg-gray-300'}`} />
-                    </button>
-
-                    <div className="h-4 w-px bg-gray-300 mx-0.5" />
-
-                    {/* Quick Case Conversions */}
-                    <button
-                      type="button"
-                      onClick={() => applyTextFormatting('uppercase')}
-                      className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-white hover:bg-gray-100 text-gray-700 border border-gray-250 cursor-pointer transition-colors"
-                      title="Convert existing notes to ALL UPPERCASE"
-                    >
-                      UPPER
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => applyTextFormatting('sentence')}
-                      className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-white hover:bg-gray-100 text-gray-700 border border-gray-250 cursor-pointer transition-colors"
-                      title="Convert existing notes to Sentence case"
-                    >
-                      Sentence
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => applyTextFormatting('lowercase')}
-                      className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-white hover:bg-gray-100 text-gray-700 border border-gray-250 cursor-pointer transition-colors"
-                      title="Convert existing notes to lowercase"
-                    >
-                      lower
-                    </button>
+                      <option value="" disabled>Aa Case</option>
+                      <option value="uppercase">UPPERCASE</option>
+                      <option value="sentence">Sentence case</option>
+                      <option value="title">Title Case</option>
+                      <option value="lowercase">lowercase</option>
+                    </select>
                   </div>
 
                   <div className="flex items-center gap-1">
                     {/* Formatting Tools */}
                     <button
                       type="button"
-                      onClick={() => applyTextFormatting('bold')}
-                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors"
-                      title="Bold text (**text**)"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applyFormatting('bold')
+                      }}
+                      className={`p-1.5 rounded-lg border cursor-pointer transition-all shadow-2xs ${
+                        activeStyles.bold
+                          ? 'bg-brand-100 text-brand-800 border-brand-400 font-bold ring-1 ring-brand-300'
+                          : 'text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border-gray-250'
+                      }`}
+                      title="Bold (Ctrl+B)"
                     >
-                      <Bold size={13} />
+                      <Bold size={13} strokeWidth={activeStyles.bold ? 3 : 2} />
                     </button>
                     <button
                       type="button"
-                      onClick={() => applyTextFormatting('bullet')}
-                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors"
-                      title="Insert bullet point (• )"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applyFormatting('italic')
+                      }}
+                      className={`p-1.5 rounded-lg border cursor-pointer transition-all shadow-2xs ${
+                        activeStyles.italic
+                          ? 'bg-brand-100 text-brand-800 border-brand-400 font-bold ring-1 ring-brand-300'
+                          : 'text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border-gray-250'
+                      }`}
+                      title="Italic (Ctrl+I)"
+                    >
+                      <Italic size={13} strokeWidth={activeStyles.italic ? 3 : 2} />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applyFormatting('underline')
+                      }}
+                      className={`p-1.5 rounded-lg border cursor-pointer transition-all shadow-2xs ${
+                        activeStyles.underline
+                          ? 'bg-brand-100 text-brand-800 border-brand-400 font-bold ring-1 ring-brand-300'
+                          : 'text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border-gray-250'
+                      }`}
+                      title="Underline (Ctrl+U)"
+                    >
+                      <Underline size={13} strokeWidth={activeStyles.underline ? 3 : 2} />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applyFormatting('bullet')
+                      }}
+                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors shadow-2xs"
+                      title="Insert bullet point list"
                     >
                       <List size={13} />
                     </button>
                     <button
                       type="button"
-                      onClick={() => applyTextFormatting('number')}
-                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors"
-                      title="Insert numbered list (1. )"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applyFormatting('number')
+                      }}
+                      className="p-1.5 rounded-lg text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer transition-colors shadow-2xs"
+                      title="Insert sequential numbered list"
                     >
                       <ListOrdered size={13} />
                     </button>
                     <button
                       type="button"
-                      onClick={() => applyTextFormatting('timestamp')}
-                      className="px-2 py-1 rounded-lg text-[11px] font-medium text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer flex items-center gap-1 transition-colors"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applyFormatting('timestamp')
+                      }}
+                      className="px-2 py-1 rounded-lg text-[11px] font-medium text-gray-700 hover:text-brand-700 bg-white hover:bg-gray-100 border border-gray-250 cursor-pointer flex items-center gap-1 transition-colors shadow-2xs"
                       title="Insert current date & time stamp"
                     >
                       <Clock size={12} />
@@ -1161,24 +1379,27 @@ export default function PunchItemForm() {
                   </div>
                 </div>
 
-                {/* Textarea with live uppercase support and voice input */}
+                {/* Rich-Text ContentEditable Editor with live formatting preview */}
                 <div className="relative">
-                  <textarea
-                    ref={textareaRef}
-                    className={`${INPUT} resize-y min-h-[110px] rounded-t-none pr-12 ${
-                      isCapsLock ? 'uppercase' : ''
-                    } ${
-                      error && !form.notes.trim() ? 'border-red-400 ring-2 ring-red-100' : ''
+                  {!form.notes && (
+                    <div className="absolute top-2.5 left-3 text-sm text-gray-400 pointer-events-none select-none z-10">
+                      Enter detailed site observation notes (Compulsory)...
+                    </div>
+                  )}
+                  <div
+                    ref={editorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    role="textbox"
+                    aria-multiline="true"
+                    className={`${INPUT} sitepunch-editor min-h-[110px] max-h-[380px] overflow-y-auto rounded-t-none pr-12 text-sm text-gray-900 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-400 leading-relaxed ${
+                      error && !form.notes ? 'border-red-400 ring-2 ring-red-100' : ''
                     }`}
-                    rows={4}
-                    placeholder={
-                      isCapsLock
-                        ? 'ENTER DETAILED SITE OBSERVATION NOTES (ALWAYS CAPS LOCK ACTIVE)...'
-                        : 'Enter detailed site observation notes (Compulsory)...'
-                    }
-                    value={form.notes}
-                    onChange={handleNotesChange}
-                    required
+                    onInput={handleEditorInput}
+                    onKeyUp={updateActiveStyles}
+                    onMouseUp={updateActiveStyles}
+                    onTouchEnd={updateActiveStyles}
+                    onBlur={handleEditorInput}
                   />
                   <button
                     type="button"
@@ -1220,7 +1441,7 @@ export default function PunchItemForm() {
                     {interimText && (
                       <div className="mt-1.5 p-2 bg-white rounded-lg border border-red-200 text-gray-900 font-medium text-xs shadow-inner">
                         <span className="text-gray-400 mr-1.5 text-[10px] font-sans uppercase">Recognizing:</span>
-                        "{isCapsLock ? interimText.toUpperCase() : interimText}"
+                        "{interimText}"
                       </div>
                     )}
                   </div>
@@ -1704,13 +1925,44 @@ export default function PunchItemForm() {
   )
 }
 
-function PhotoThumb({ photo, onEdit, onDelete }) {
+function PhotoThumb({ photo, index, onGripPointerDown, onEdit, onDelete }) {
   return (
-    <div className="relative aspect-square rounded-xl overflow-hidden border border-gray-100 group">
-      <img src={photo.imageData} alt="" className="w-full h-full object-cover" />
-      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-        <button type="button" onClick={onEdit}   className="p-1.5 bg-white rounded-full text-brand-700" title="Edit photo markup"><Edit2 size={14}/></button>
-        <button type="button" onClick={onDelete} className="p-1.5 bg-white rounded-full text-red-500" title="Delete photo"><Trash2 size={14}/></button>
+    <div className="relative w-full h-full aspect-square rounded-xl overflow-hidden border border-gray-200 group bg-gray-100 shadow-2xs select-none">
+      <img src={photo.imageData} alt="" className="w-full h-full object-cover pointer-events-none" />
+
+      {/* Photo Order Badge (1st photo is main observation thumbnail) */}
+      <div className="absolute top-1.5 left-1.5 bg-black/60 backdrop-blur-xs text-white text-[10px] font-bold px-1.5 py-0.5 rounded-md pointer-events-none z-10 flex items-center gap-1 shadow-xs">
+        <span>#{index}</span>
+        {index === 1 && <span className="text-[9px] text-emerald-300 font-semibold uppercase">Main</span>}
+      </div>
+
+      {/* Touch / Pointer Grip Handle for Mobile / iPad */}
+      <div
+        onPointerDown={onGripPointerDown}
+        className="absolute bottom-1.5 left-1.5 p-1 bg-black/50 hover:bg-black/70 text-white/90 hover:text-white rounded-md cursor-grab active:cursor-grabbing z-10 touch-none shadow-xs"
+        title="Drag to rearrange photo position"
+      >
+        <GripVertical size={14} />
+      </div>
+
+      {/* Edit & Delete hover/tap overlay */}
+      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 z-20">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onEdit(); }}
+          className="p-1.5 bg-white hover:bg-gray-100 rounded-full text-brand-700 shadow-md cursor-pointer transition-transform hover:scale-110 active:scale-95"
+          title="Edit photo markup"
+        >
+          <Edit2 size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="p-1.5 bg-white hover:bg-gray-100 rounded-full text-red-600 shadow-md cursor-pointer transition-transform hover:scale-110 active:scale-95"
+          title="Delete photo"
+        >
+          <Trash2 size={14} />
+        </button>
       </div>
     </div>
   )
