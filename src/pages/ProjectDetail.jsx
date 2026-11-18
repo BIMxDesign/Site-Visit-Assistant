@@ -13,7 +13,7 @@ import {
   db,
   getProject, saveProject,
   getFloorPlans, deleteFloorPlan, sortFloorPlans, reorderFloorPlans, saveFloorPlan,
-  getPunchItems, deletePunchItem, resequenceReportPins, savePunchItem,
+  getPunchItems, deletePunchItem, resequenceReportPins, savePunchItem, getNextItemNumber,
   ensureProjectPhases, deletePhase, savePhase,
   getPhotos, savePhoto
 } from '../db/database'
@@ -681,8 +681,6 @@ export default function ProjectDetail() {
       setShowPhaseModal(true)
       return
     }
-    const { savePunchItem, getNextItemNumber } = await import('../db/database')
-    const { v4: uuidv4 } = await import('uuid')
     const nextNumber = await getNextItemNumber(currentProjectUuid, targetPhase.uuid)
     const newUuid = uuidv4()
     const newItem = {

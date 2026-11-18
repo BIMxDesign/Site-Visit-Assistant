@@ -2,9 +2,8 @@ import React, { useState, useEffect } from 'react'
 import {
   FileText, Download, Loader, Check, Filter,
   FileSpreadsheet, MapPin, Sliders, Lock, Key, CreditCard, ShieldCheck, Type, ArrowLeft,
-  Eye, Printer, FileCheck, CheckSquare, FolderArchive, Image as ImageIcon
+  Eye, Printer, FileCheck, CheckSquare, FolderArchive, Image as ImageIcon, FileType
 } from 'lucide-react'
-import JSZip from 'jszip'
 import { useAppStore } from '../store/useAppStore'
 import {
   getProject, getFloorPlans, getPunchItems, getPhotos, getPhases, sortFloorPlans, getUsers,
@@ -23,20 +22,14 @@ import {
   prepareKeyPlanImageForQuality,
   prepareLogoForQuality,
 } from '../utils/media'
-
-function getImageDimensions(src) {
-  return new Promise((resolve) => {
-    if (!src) return resolve({ width: 1, height: 1, aspect: 1 })
-    const img = new Image()
-    img.onload = () => {
-      const w = img.naturalWidth || img.width || 800
-      const h = img.naturalHeight || img.height || 600
-      resolve({ width: w, height: h, aspect: w / h })
-    }
-    img.onerror = () => resolve({ width: 1, height: 1, aspect: 1 })
-    img.src = src
-  })
-}
+import {
+  renderFloorPlanWithPins as renderFloorPlanWithPinsUtil,
+  renderPinDrawingCrop as renderPinDrawingCropUtil,
+  getImageDimensions,
+} from '../services/export/drawingRenderer'
+import { generateCsvReport } from '../services/export/csvExporter'
+import { generateZipArchive } from '../services/export/zipExporter'
+import { generateWordReport } from '../services/export/docxExporter'
 
 export default function PDFPreview() {
   const {
@@ -113,7 +106,7 @@ export default function PDFPreview() {
       reportCreatedBy: true, // Report Created By
       attendees: true, // List of Attendees
       photosOnRight: initialImageLayout === 'right', // Observation Images on Right Side (true = on right side, false = below notes)
-      reportAsTable: false, // Report as Table (Table layout: Category, Description, Photos, Drawing location)
+      reportAsTable: false, // Report as Table (Table layout: Key Plan, Category, Description, Photos)
     }
     try {
       const saved = localStorage.getItem('sitepunch_export_fields')
@@ -311,442 +304,52 @@ export default function PDFPreview() {
 
   // Render floor plan image with circular pins scaled to active Photo Quality profile
   async function renderFloorPlanWithPins(floorPlan, itemsToDraw) {
-    if (!floorPlan?.imageData) return null
-    const kpProfile = getKeyPlanQualityProfile(activeQuality)
-    return new Promise((resolve) => {
-      const img = new Image()
-      img.onload = () => {
-        try {
-          const natW = img.naturalWidth || img.width || 1600
-          const natH = img.naturalHeight || img.height || 1200
-          const maxSide = Math.max(natW, natH)
-          const outScale = (kpProfile.id !== 'original' && Number.isFinite(kpProfile.maxDim) && maxSide > kpProfile.maxDim)
-            ? kpProfile.maxDim / maxSide
-            : 1
-          const w = Math.max(1, Math.round(natW * outScale))
-          const h = Math.max(1, Math.round(natH * outScale))
-          const canvas = document.createElement('canvas')
-          canvas.width = w
-          canvas.height = h
-          const ctx = canvas.getContext('2d')
-          ctx.fillStyle = '#ffffff'
-          ctx.fillRect(0, 0, w, h)
-          ctx.drawImage(img, 0, 0, w, h)
-
-          // Pin radius proportioned to image dimensions for crisp readability
-          const radius = Math.max(18, Math.round(Math.min(w, h) * 0.02))
-
-          // 1. Gather all valid pins (including extra pin instances) and map to canvas coordinates
-          const pinDataList = []
-          itemsToDraw.forEach(item => {
-            if (!item.notes || !item.notes.trim()) return // Ignore any blank observation pins
-
-            const pinsToProcess = []
-            // Primary pin on this floor plan
-            if (item.pinX != null && item.pinY != null && (item.floorPlanUuid === floorPlan.uuid || !item.floorPlanUuid)) {
-              pinsToProcess.push({ x: Number(item.pinX), y: Number(item.pinY) })
-            }
-            // Extra pins on this floor plan
-            if (Array.isArray(item.extraPins)) {
-              item.extraPins.forEach(ep => {
-                if (ep.pinX != null && ep.pinY != null && (ep.floorPlanUuid === floorPlan.uuid || (!ep.floorPlanUuid && item.floorPlanUuid === floorPlan.uuid))) {
-                  pinsToProcess.push({ x: Number(ep.pinX), y: Number(ep.pinY) })
-                }
-              })
-            }
-
-            pinsToProcess.forEach(loc => {
-              const rawX = loc.x
-              const rawY = loc.y
-              if (isNaN(rawX) || isNaN(rawY)) return
-
-              // Compute px and py in canvas pixels
-              let px = rawX
-              let py = rawY
-
-              // Handle normalized coordinates (0 to 1) if present
-              if (rawX <= 1 && rawY <= 1 && w > 1 && h > 1) {
-                px = rawX * w
-                py = rawY * h
-              } else if (img.naturalWidth && w !== img.naturalWidth) {
-                px = rawX * (w / img.naturalWidth)
-                py = rawY * (h / img.naturalHeight)
-              }
-
-              // Clamped original coordinates
-              const origX = Math.max(radius, Math.min(w - radius, px))
-              const origY = Math.max(radius, Math.min(h - radius, py))
-
-              pinDataList.push({
-                item,
-                origX,
-                origY,
-                x: origX,
-                y: origY,
-                radius,
-                displaced: false,
-              })
-            })
-          })
-
-          // 2. Multi-pass Anti-Collision & Separation Engine:
-          // Smoothly repels overlapping pins so all numbers are clear and 100% visible on print
-          const minDist = radius * 2 + 5 // Minimum spacing between pin centers to avoid any badge overlap
-          const iterations = 45
-
-          for (let iter = 0; iter < iterations; iter++) {
-            let moved = false
-            for (let i = 0; i < pinDataList.length; i++) {
-              for (let j = i + 1; j < pinDataList.length; j++) {
-                const p1 = pinDataList[i]
-                const p2 = pinDataList[j]
-
-                let dx = p2.x - p1.x
-                let dy = p2.y - p1.y
-                let dist = Math.hypot(dx, dy)
-
-                if (dist < minDist) {
-                  moved = true
-                  // If pins share the exact same pixel, push in deterministic radial angles
-                  if (dist < 0.001) {
-                    const angle = ((j * 2.39996) + iter * 0.5) // Golden ratio dispersion
-                    dx = Math.cos(angle)
-                    dy = Math.sin(angle)
-                    dist = 1
-                  }
-
-                  const overlap = minDist - dist
-                  const nx = dx / dist
-                  const ny = dy / dist
-                  const half = overlap * 0.5
-
-                  p1.x -= nx * half
-                  p1.y -= ny * half
-                  p2.x += nx * half
-                  p2.y += ny * half
-                }
-              }
-            }
-
-            // Maintain boundaries within canvas margins
-            for (const p of pinDataList) {
-              p.x = Math.max(radius + 2, Math.min(w - radius - 2, p.x))
-              p.y = Math.max(radius + 2, Math.min(h - radius - 2, p.y))
-            }
-
-            if (!moved) break
-          }
-
-          // Mark pins that were visibly displaced from original coordinates
-          pinDataList.forEach(p => {
-            const disp = Math.hypot(p.x - p.origX, p.y - p.origY)
-            p.displaced = disp > radius * 0.35
-          })
-
-          // 3. Pass 1: Draw architectural leader lines and anchor dots for displaced pins
-          pinDataList.forEach(p => {
-            if (!p.displaced) return
-
-            // Outer white casing for leader line (contrasts against both dark and light CAD lines)
-            ctx.beginPath()
-            ctx.moveTo(p.origX, p.origY)
-            ctx.lineTo(p.x, p.y)
-            ctx.strokeStyle = '#ffffff'
-            ctx.lineWidth = Math.max(3, Math.round(radius * 0.16))
-            ctx.lineCap = 'round'
-            ctx.stroke()
-
-            // Main leader line in pin color
-            ctx.beginPath()
-            ctx.moveTo(p.origX, p.origY)
-            ctx.lineTo(p.x, p.y)
-            ctx.strokeStyle = pinColor || '#a40e26'
-            ctx.lineWidth = Math.max(1.5, Math.round(radius * 0.09))
-            ctx.lineCap = 'round'
-            ctx.stroke()
-
-            // True location target anchor dot
-            const anchorR = Math.max(3.5, Math.round(radius * 0.22))
-            ctx.beginPath()
-            ctx.arc(p.origX, p.origY, anchorR + 1.5, 0, Math.PI * 2)
-            ctx.fillStyle = '#ffffff'
-            ctx.fill()
-
-            ctx.beginPath()
-            ctx.arc(p.origX, p.origY, anchorR, 0, Math.PI * 2)
-            ctx.fillStyle = pinColor || '#a40e26'
-            ctx.fill()
-          })
-
-          // 4. Pass 2: Draw all pin circles, borders, and bold numbers
-          pinDataList.forEach(p => {
-            const { x: px, y: py, item } = p
-
-            // Drop shadow for high contrast on light/dark drawings
-            ctx.beginPath()
-            ctx.arc(px, py + 1.5, radius + 2.5, 0, Math.PI * 2)
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'
-            ctx.fill()
-
-            // Crisp outer white border
-            ctx.beginPath()
-            ctx.arc(px, py, radius + 2, 0, Math.PI * 2)
-            ctx.fillStyle = '#ffffff'
-            ctx.fill()
-
-            // Pin circle in brand/pin color
-            ctx.beginPath()
-            ctx.arc(px, py, radius, 0, Math.PI * 2)
-            ctx.fillStyle = pinColor || '#a40e26'
-            ctx.fill()
-            ctx.lineWidth = Math.max(2, Math.round(radius * 0.12))
-            ctx.strokeStyle = '#ffffff'
-            ctx.stroke()
-
-            // Centered pin number (bold white)
-            ctx.fillStyle = '#ffffff'
-            const numStr = String(item.itemNumber || '')
-            const fontSize = numStr.length > 2
-              ? Math.round(radius * 0.85)
-              : Math.round(radius * 1.1)
-            const activeFontFamily = getFontFamily(selectedPdfFont || appFont)
-            ctx.font = `bold ${fontSize}px ${activeFontFamily}`
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-            ctx.fillText(numStr, px, py + 1)
-          })
-
-          resolve({
-            dataUrl: canvas.toDataURL('image/jpeg', kpProfile.quality),
-            aspect: w / h,
-            width: w,
-            height: h,
-          })
-        } catch (e) {
-          console.warn('Keyplan render failed', e)
-          resolve(null)
-        }
-      }
-      img.onerror = () => resolve(null)
-      img.src = floorPlan.imageData
+    return renderFloorPlanWithPinsUtil({
+      floorPlan,
+      itemsToDraw,
+      activeQuality,
+      pinColor,
+      fontName: selectedPdfFont || appFont,
     })
   }
 
   // Render high-res cropped floor plan snippet centered on a specific pin for the Table View
   async function renderPinDrawingCrop(floorPlan, item) {
-    if (!floorPlan?.imageData) return null
-    return new Promise((resolve) => {
-      const img = new Image()
-      img.onload = () => {
-        try {
-          const natW = img.naturalWidth || img.width || 1600
-          const natH = img.naturalHeight || img.height || 1200
-
-          let rawX = item.pinX != null ? Number(item.pinX) : null
-          let rawY = item.pinY != null ? Number(item.pinY) : null
-
-          // Fallback to first extraPin if primary coordinates are missing
-          if ((rawX == null || isNaN(rawX)) && Array.isArray(item.extraPins) && item.extraPins.length > 0) {
-            const ep = item.extraPins.find(p => p.floorPlanUuid === floorPlan.uuid || (!p.floorPlanUuid && item.floorPlanUuid === floorPlan.uuid))
-            if (ep && ep.pinX != null && ep.pinY != null) {
-              rawX = Number(ep.pinX)
-              rawY = Number(ep.pinY)
-            }
-          }
-
-          if (rawX == null || isNaN(rawX) || rawY == null || isNaN(rawY)) {
-            resolve(null)
-            return
-          }
-
-          let px = rawX
-          let py = rawY
-          if (rawX <= 1 && rawY <= 1 && natW > 1 && natH > 1) {
-            px = rawX * natW
-            py = rawY * natH
-          }
-
-          // Crop window size: roughly 22% of image dimension (gives great architectural context around the pin)
-          const cropDim = Math.max(220, Math.round(Math.min(natW, natH) * 0.22))
-          const halfCrop = cropDim / 2
-
-          let cropX = Math.max(0, Math.min(natW - cropDim, px - halfCrop))
-          let cropY = Math.max(0, Math.min(natH - cropDim, py - halfCrop))
-          let actualCropW = Math.min(cropDim, natW - cropX)
-          let actualCropH = Math.min(cropDim, natH - cropY)
-
-          const outSize = 360
-          const canvas = document.createElement('canvas')
-          canvas.width = outSize
-          canvas.height = outSize
-          const ctx = canvas.getContext('2d')
-
-          // Background white
-          ctx.fillStyle = '#ffffff'
-          ctx.fillRect(0, 0, outSize, outSize)
-
-          // Draw cropped section of floor plan
-          ctx.drawImage(img, cropX, cropY, actualCropW, actualCropH, 0, 0, outSize, outSize)
-
-          // Pin relative coordinates on the cropped canvas
-          const pinCanvasX = ((px - cropX) / actualCropW) * outSize
-          const pinCanvasY = ((py - cropY) / actualCropH) * outSize
-
-          // Proportional pin radius
-          const pinR = Math.max(16, Math.round(outSize * 0.052))
-
-          // Subtle shadow
-          ctx.beginPath()
-          ctx.arc(pinCanvasX, pinCanvasY + 1.5, pinR + 2, 0, Math.PI * 2)
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'
-          ctx.fill()
-
-          // White outer border ring
-          ctx.beginPath()
-          ctx.arc(pinCanvasX, pinCanvasY, pinR + 1.5, 0, Math.PI * 2)
-          ctx.fillStyle = '#ffffff'
-          ctx.fill()
-
-          // Pin circle in brand pinColor
-          ctx.beginPath()
-          ctx.arc(pinCanvasX, pinCanvasY, pinR, 0, Math.PI * 2)
-          ctx.fillStyle = pinColor || '#a40e26'
-          ctx.fill()
-          ctx.lineWidth = 1.8
-          ctx.strokeStyle = '#ffffff'
-          ctx.stroke()
-
-          // Pin number (bold white)
-          ctx.fillStyle = '#ffffff'
-          const numStr = String(item.itemNumber || '')
-          const fontSize = numStr.length > 2
-            ? Math.round(pinR * 0.85)
-            : Math.round(pinR * 1.05)
-          const activeFontFamily = getFontFamily(selectedPdfFont || appFont)
-          ctx.font = `bold ${fontSize}px ${activeFontFamily}`
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(numStr, pinCanvasX, pinCanvasY + 1)
-
-          resolve({
-            dataUrl: canvas.toDataURL('image/jpeg', 0.92),
-            width: outSize,
-            height: outSize,
-          })
-        } catch (err) {
-          console.warn('renderPinDrawingCrop error', err)
-          resolve(null)
-        }
-      }
-      img.onerror = () => resolve(null)
-      img.src = floorPlan.imageData
+    return renderPinDrawingCropUtil({
+      floorPlan,
+      item,
+      pinColor,
+      fontName: selectedPdfFont || appFont,
     })
   }
+
+  const effectiveDesc = (effectiveReport?.description?.trim()) || (project?.description?.trim()) || ''
 
   // CSV Generator
   async function handleGenerateCSV() {
     setGenerating(true)
     try {
-      const headers = ['Item #', 'Report']
-      const effectiveDesc = (effectiveReport?.description?.trim()) || (project?.description?.trim()) || ''
-      if (effectiveDesc) headers.push('Report Description')
-      if (exportFields.keyPlans)       headers.push('Key Plan')
-      if (exportFields.trade)          headers.push('Category')
-      if (exportFields.priority)       headers.push('Priority')
-      if (exportFields.status)         headers.push('Status')
-      headers.push('Assigned To')
-      if (exportFields.dueDate)        headers.push('Due Date')
-      if (exportFields.notes)          headers.push('Observation Notes')
-      headers.push('Visit Date', 'Visit Time', 'Weather')
-      if (exportFields.reportCreatedBy) {
-        headers.push('Report Created By')
-      }
-      if (exportFields.attendees) {
-        headers.push('Attendees')
-      }
-      if (exportFields.keyPlans) {
-        headers.push('Pin X', 'Pin Y')
-      }
-      if (exportFields.photos) {
-        headers.push('Photo Count')
-      }
-
-      const escapeCSV = (str) => {
-        if (str == null) return '""'
-        const s = String(str).replace(/"/g, '""')
-        return `"${s}"`
-      }
-
-      // Live license verification before generating CSV export
       const liveLicensed = (await checkProjectLicense(currentProjectUuid, currentUser?.email)) || project?.isLicensed || !!project?.licenseKey
-      if (liveLicensed !== isLicensed) {
-        setIsLicensed(liveLicensed)
-      }
+      if (liveLicensed !== isLicensed) setIsLicensed(liveLicensed)
 
-      // If project is unlicensed, export strictly only the first 2 observation items across the entire report
       const sortedItems = [...filteredItems].sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
       const isCapped = !liveLicensed && sortedItems.length > 2
       const itemsToExport = isCapped ? sortedItems.slice(0, 2) : sortedItems
 
-      const rows = itemsToExport.map(item => {
-        const fp = floorPlans.find(f => f.uuid === item.floorPlanUuid)
-        const phase = phases.find(p => p.uuid === (item.phaseUuid || fp?.phaseUuid)) || activeReport || effectiveReport
-        const pCount = (photosMap[item.uuid] || []).length
-        const cols = [escapeCSV(item.itemNumber || ''), escapeCSV(phase?.name || '')]
-        if (effectiveDesc) cols.push(escapeCSV(effectiveDesc))
-        if (exportFields.keyPlans)       cols.push(escapeCSV(fp?.name || ''))
-        if (exportFields.trade)          cols.push(escapeCSV(item.trade || ''))
-        if (exportFields.priority)       cols.push(escapeCSV(item.priority || ''))
-        if (exportFields.status)         cols.push(escapeCSV(normalizeObservationStatus(item.status)))
-        cols.push(escapeCSV(item.assignedTo || ''))
-        if (exportFields.dueDate)        cols.push(escapeCSV(item.dueDate || ''))
-        if (exportFields.notes)          cols.push(escapeCSV(stripHtmlToPlainText(item.notes || '')))
-        cols.push(
-          escapeCSV(phase?.visitDate || ''),
-          escapeCSV(phase?.visitTime || ''),
-          escapeCSV(phase?.weather || '')
-        )
-        if (exportFields.reportCreatedBy) {
-          cols.push(escapeCSV(phase?.createdBy || effectiveReport?.createdBy || reportCreator || ''))
-        }
-        if (exportFields.attendees) {
-          cols.push(escapeCSV(phase?.attendees || effectiveReport?.attendees || ''))
-        }
-        if (exportFields.keyPlans) {
-          cols.push(
-            escapeCSV(item.pinX != null ? Math.round(item.pinX) : ''),
-            escapeCSV(item.pinY != null ? Math.round(item.pinY) : '')
-          )
-        }
-        if (exportFields.photos) {
-          cols.push(escapeCSV(pCount))
-        }
-        return cols.join(',')
+      await generateCsvReport({
+        itemsToExport,
+        project,
+        effectiveReport,
+        effectiveDesc,
+        exportFields,
+        floorPlans,
+        phases,
+        activeReport,
+        reportCreator,
+        photosMap,
+        filterDrawing,
+        currentProjectUuid,
       })
-
-      const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n')
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      const safeReport = (effectiveReport?.name || project?.name || 'Report').replace(/[^a-z0-9]/gi, '_')
-      const currentDrawingObj = floorPlans.find(f => f.uuid === filterDrawing)
-      const safeDrawing = filterDrawing !== 'All' && currentDrawingObj ? `_${currentDrawingObj.name.replace(/[^a-z0-9]/gi, '_')}` : ''
-      a.href = url
-      a.download = `PunchList_${safeReport}${safeDrawing}_${new Date().toISOString().slice(0, 10)}.csv`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-
-      // Log CSV export per-project for the Logs tab in Settings
-      logExport({
-        projectUuid: currentProjectUuid || '',
-        projectName: project?.name || '',
-        type: 'csv',
-        reportName: effectiveReport?.name || project?.name || '',
-        filename: `PunchList_${safeReport}${safeDrawing}_${new Date().toISOString().slice(0, 10)}.csv`,
-        pageCount: null,
-      }).catch(() => {})
 
       setDone(true)
       setTimeout(() => { setDone(false); closePDFPreview() }, 1200)
@@ -761,162 +364,74 @@ export default function PDFPreview() {
   async function handleGenerateZip() {
     setGenerating(true)
     try {
-      // Live license verification before generating ZIP archive export
       const liveLicensed = (await checkProjectLicense(currentProjectUuid, currentUser?.email)) || project?.isLicensed || !!project?.licenseKey
-      if (liveLicensed !== isLicensed) {
-        setIsLicensed(liveLicensed)
-      }
+      if (liveLicensed !== isLicensed) setIsLicensed(liveLicensed)
 
-      // If project is unlicensed, export strictly only the first 2 observation items across the entire report
       const sortedItems = [...filteredItems].sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
       const isCapped = !liveLicensed && sortedItems.length > 2
       const itemsToExport = isCapped ? sortedItems.slice(0, 2) : sortedItems
 
-      const zip = new JSZip()
-      const safeReportName = (effectiveReport?.name || project?.name || 'Inspection_Report')
-        .replace(/[^a-z0-9_-]/gi, '_')
-        .replace(/_+/g, '_')
-
-      // Folder 1: Key Plans / Drawings
-      const keyPlansFolder = zip.folder('01_Key_Plans')
-      let keyPlansToExport = availableDrawings.length > 0 ? availableDrawings : floorPlans
-
-      // If unlicensed/capped with multiple key plans, only export key plans containing the first 2 observations
-      if (isCapped && keyPlansToExport.length > 1) {
-        const exportedFpUuids = new Set(itemsToExport.map(i => i.floorPlanUuid).filter(Boolean))
-        const cappedKeyPlans = keyPlansToExport.filter(fp => exportedFpUuids.has(fp.uuid))
-        if (cappedKeyPlans.length > 0) {
-          keyPlansToExport = cappedKeyPlans
-        } else {
-          keyPlansToExport = [keyPlansToExport[0]]
-        }
-      }
-
-      for (let idx = 0; idx < keyPlansToExport.length; idx++) {
-        const fp = keyPlansToExport[idx]
-        const itemsInFp = itemsToExport.filter(it =>
-          it.floorPlanUuid === fp.uuid ||
-          (Array.isArray(it.extraPins) && it.extraPins.some(ep => ep.floorPlanUuid === fp.uuid))
-        )
-
-        // Render floor plan with pins
-        const rendered = await renderFloorPlanWithPins(fp, itemsInFp)
-        const safeFpName = (fp.name || `Drawing_${idx + 1}`).replace(/[^a-z0-9_-]/gi, '_')
-
-        if (rendered?.dataUrl) {
-          const base64Data = rendered.dataUrl.split(',')[1]
-          if (base64Data) {
-            keyPlansFolder.file(`${String(idx + 1).padStart(2, '0')}_${safeFpName}_with_pins.jpg`, base64Data, { base64: true })
-          }
-        } else if (fp.imageData) {
-          const processedFpData = await prepareKeyPlanImageForQuality(fp.imageData, activeQuality)
-          const base64Data = processedFpData.split(',')[1]
-          if (base64Data) {
-            const ext = processedFpData.startsWith('data:image/png') ? 'png' : 'jpg'
-            keyPlansFolder.file(`${String(idx + 1).padStart(2, '0')}_${safeFpName}.${ext}`, base64Data, { base64: true })
-          }
-        }
-      }
-
-      // Folder 2: Observation Photos
-      const photosFolder = zip.folder('02_Observation_Photos')
-      let totalPhotosAdded = 0
-
-      for (const item of itemsToExport) {
-        const itemPhotos = photosMap[item.uuid] || []
-        const itemNum = String(item.itemNumber || '').padStart(2, '0')
-        const tradeTag = (item.trade || 'General').replace(/[^a-z0-9_-]/gi, '_')
-
-        for (let pIdx = 0; pIdx < itemPhotos.length; pIdx++) {
-          const photo = itemPhotos[pIdx]
-          if (photo.imageData && photo.imageData.includes('base64,')) {
-            const processedPhoto = await ensurePhotoMatchesQuality(photo.imageData, activeQuality)
-            const base64Data = processedPhoto.split(',')[1]
-            if (base64Data) {
-              const ext = processedPhoto.startsWith('data:image/png') ? 'png' : 'jpg'
-              const filename = `Pin_${itemNum}_Photo_${pIdx + 1}_${tradeTag}.${ext}`
-              photosFolder.file(filename, base64Data, { base64: true })
-              totalPhotosAdded++
-            }
-          }
-        }
-      }
-
-      // Summary README
-      let readme = `===========================================================\r\n`
-      readme += `SITE PUNCH - IMAGES ARCHIVE EXPORT\r\n`
-      readme += `===========================================================\r\n\r\n`
-      readme += `Project: ${project?.name || 'Untitled Project'}\r\n`
-      const effectiveDesc = (effectiveReport?.description?.trim()) || (project?.description?.trim()) || ''
-      if (effectiveDesc) {
-        readme += `Description: ${effectiveDesc}\r\n`
-      }
-      readme += `Report:  ${effectiveReport?.name || 'Inspection Walk'}\r\n`
-      if (exportFields.reportCreatedBy) {
-        const creator = effectiveReport?.createdBy || reportCreator
-        if (creator) readme += `Report Created By: ${creator}\r\n`
-      }
-      if (exportFields.attendees && effectiveReport?.attendees) {
-        let attList = effectiveReport.attendees.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-        if (attList.length === 1 && attList[0].includes(',')) {
-          attList = attList[0].split(',').map(s => s.trim()).filter(Boolean)
-        }
-        if (attList.length > 0) {
-          readme += `Attendees:\r\n`
-          attList.forEach(a => { readme += `  • ${a}\r\n` })
-        }
-      }
-      readme += `Date:    ${new Date().toLocaleString()}\r\n`
-      readme += `Items:   ${itemsToExport.length} observation(s) exported\r\n`
-      readme += `Photos:  ${totalPhotosAdded} observation photo(s)\r\n`
-      readme += `Plans:   ${keyPlansToExport.length} key plan drawing(s)\r\n\r\n`
-      if (isCapped) {
-        readme += `[NOTE] This project is unlicensed. Images export is limited to the first 2 observations.\r\n\r\n`
-      }
-      readme += `-----------------------------------------------------------\r\n`
-      readme += `OBSERVATIONS OVERVIEW\r\n`
-      readme += `-----------------------------------------------------------\r\n`
-      itemsToExport.forEach((it, idx) => {
-        const pCount = (photosMap[it.uuid] || []).length
-        readme += `#${it.itemNumber || idx + 1} | Category: ${it.trade || 'General'} | Priority: ${it.priority || 'Medium'} | Status: ${normalizeObservationStatus(it.status)}\r\n`
-        if (it.notes) readme += `   Notes: ${stripHtmlToPlainText(it.notes)}\r\n`
-        if (pCount > 0) readme += `   Photos: ${pCount} attached\r\n`
-        readme += `\r\n`
+      await generateZipArchive({
+        itemsToExport,
+        project,
+        effectiveReport,
+        effectiveDesc,
+        exportFields,
+        availableDrawings,
+        floorPlans,
+        photosMap,
+        activeQuality,
+        isCapped,
+        reportCreator,
+        currentProjectUuid,
+        renderFloorPlanWithPins,
       })
-
-      zip.file('README.txt', readme)
-
-      // Generate zip archive blob
-      const content = await zip.generateAsync({
-        type: 'blob',
-        compression: 'DEFLATE',
-        compressionOptions: { level: 6 }
-      })
-
-      const url = URL.createObjectURL(content)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${safeReportName}_Images_${formatDatePattern(new Date(), 'YYYY-MM-DD')}.zip`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-
-      // Log ZIP export per-project for the Logs tab in Settings
-      logExport({
-        projectUuid: currentProjectUuid || '',
-        projectName: project?.name || '',
-        type: 'zip',
-        reportName: effectiveReport?.name || project?.name || '',
-        filename: `${safeReportName}_Images_${formatDatePattern(new Date(), 'YYYY-MM-DD')}.zip`,
-        pageCount: null,
-      }).catch(() => {})
 
       setDone(true)
       setTimeout(() => { setDone(false); closePDFPreview() }, 1200)
     } catch (err) {
       console.error('ZIP generation failed:', err)
       alert('Images ZIP export failed: ' + (err.message || String(err)))
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  // Word Document (.docx) Generator
+  async function handleGenerateDocx() {
+    setGenerating(true)
+    try {
+      const liveLicensed = (await checkProjectLicense(currentProjectUuid, currentUser?.email)) || project?.isLicensed || !!project?.licenseKey
+      if (liveLicensed !== isLicensed) setIsLicensed(liveLicensed)
+
+      const sortedItems = [...filteredItems].sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
+      const isCapped = !liveLicensed && sortedItems.length > 2
+      const itemsToExport = isCapped ? sortedItems.slice(0, 2) : sortedItems
+
+      await generateWordReport({
+        itemsToExport,
+        project,
+        effectiveReport,
+        exportFields,
+        availableDrawings,
+        floorPlans,
+        photosMap,
+        activeQuality,
+        isCapped,
+        paperSize,
+        orientation,
+        companyLogo,
+        reportCreator,
+        currentProjectUuid,
+        renderFloorPlanWithPins,
+        renderPinDrawingCrop,
+      })
+
+      setDone(true)
+      setTimeout(() => { setDone(false); closePDFPreview() }, 1200)
+    } catch (err) {
+      console.error('Word Document generation failed:', err)
+      alert('Word Document (.docx) export failed: ' + (err.message || String(err)))
     } finally {
       setGenerating(false)
     }
@@ -1161,7 +676,7 @@ export default function PDFPreview() {
         const planCrop = hasPlanCrop ? exportPinCropMap[item.uuid] : null
         const planCropSize = 36
         const planGap = 4.5
-        const planSheetText = fp ? `Sheets: ${fp.name}` : ''
+        const planSheetText = fp?.name || ''
         doc.setFont(pdfFont, 'normal')
         doc.setFontSize(7.0)
         const planSheetLines = (hasPlanCrop && planSheetText) ? doc.splitTextToSize(planSheetText, planCropSize) : []
@@ -1179,148 +694,23 @@ export default function PDFPreview() {
         const photoDims = []
         let shouldStack = false
 
-        // Calculate adaptive photo dimensions within the fields area
-        const maxPhotoAreaW = imageLayout === 'below' ? fieldsW : Math.min(fieldsW * 0.48, 68)
+        // Consistent photo height across all observation pins and both layouts ('right' and 'below')
+        const CONSISTENT_PHOTO_H = 36
         const photoGap = 3.5
+        const maxPhotoAreaW = imageLayout === 'below' ? fieldsW : Math.min(fieldsW * 0.52, 75)
 
-        if (numPhotos === 1) {
-          const photo = validPhotos[0]
+        for (const photo of validPhotos) {
           const aspect = photo.aspect && photo.aspect > 0 ? photo.aspect : 1.33
-          let pW, pH
-
-          if (imageLayout === 'below') {
-            if (aspect >= 1.15) {
-              pW = Math.min(fieldsW, 95)
-              pH = pW / aspect
-              if (pH > 60) { pH = 60; pW = pH * aspect }
-            } else if (aspect >= 0.85) {
-              pH = 50
-              pW = pH * aspect
-            } else {
-              pH = 58
-              pW = pH * aspect
-              if (pW > fieldsW) { pW = fieldsW; pH = pW / aspect }
-            }
-          } else {
-            if (aspect >= 1.15) {
-              pW = Math.min(maxPhotoAreaW, 65)
-              pH = pW / aspect
-              if (pH > 48) { pH = 48; pW = pH * aspect }
-              if (pH < 34) { pH = 34; pW = Math.min(maxPhotoAreaW, pH * aspect) }
-            } else if (aspect >= 0.85) {
-              pH = 45
-              pW = pH * aspect
-            } else {
-              pH = 50
-              pW = pH * aspect
-              if (pW < 30) { pW = 30; pH = Math.min(55, pW / aspect) }
-              if (pW > maxPhotoAreaW) { pW = maxPhotoAreaW; pH = pW / aspect }
-            }
-          }
+          const pH = CONSISTENT_PHOTO_H
+          const pW = Math.min(maxPhotoAreaW, Math.round(pH * aspect * 10) / 10)
           photoDims.push({ photo, pW, pH, aspect })
-        } else if (numPhotos === 2) {
-          const p1 = validPhotos[0]
-          const p2 = validPhotos[1]
-          const a1 = p1.aspect && p1.aspect > 0 ? p1.aspect : 1.33
-          const a2 = p2.aspect && p2.aspect > 0 ? p2.aspect : 1.33
+        }
 
-          if (imageLayout === 'below') {
-            let targetH = 38
-            let w1 = targetH * a1
-            let w2 = targetH * a2
-            let totalW = w1 + w2 + photoGap
-            if (totalW > fieldsW) {
-              const scale = (fieldsW - photoGap) / (w1 + w2)
-              targetH *= scale
-              w1 = targetH * a1
-              w2 = targetH * a2
-            }
-            photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
-            photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
-          } else {
-            let targetH = 35
-            let w1 = targetH * a1
-            let w2 = targetH * a2
-            let totalW = w1 + w2 + photoGap
-
-            if (totalW > maxPhotoAreaW) {
-              const scale = (maxPhotoAreaW - photoGap) / (w1 + w2)
-              if (targetH * scale >= 24) {
-                targetH *= scale
-                w1 = targetH * a1
-                w2 = targetH * a2
-                photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
-                photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
-              } else {
-                shouldStack = true
-                for (const photo of validPhotos) {
-                  const aspect = photo.aspect && photo.aspect > 0 ? photo.aspect : 1.33
-                  let pH = 34
-                  let pW = pH * aspect
-                  if (pW > maxPhotoAreaW) {
-                    pW = maxPhotoAreaW
-                    pH = pW / aspect
-                  }
-                  photoDims.push({ photo, pW, pH, aspect })
-                }
-              }
-            } else {
-              photoDims.push({ photo: p1, pW: w1, pH: targetH, aspect: a1 })
-              photoDims.push({ photo: p2, pW: w2, pH: targetH, aspect: a2 })
-            }
-          }
-        } else if (numPhotos >= 3) {
-          if (imageLayout === 'below') {
-            let targetH = 34
-            const aspects = validPhotos.map(p => (p.aspect && p.aspect > 0 ? p.aspect : 1.33))
-            const widths = aspects.map(a => targetH * a)
-            const totalW = widths.reduce((s, w) => s + w, 0) + (numPhotos - 1) * photoGap
-            if (totalW > fieldsW) {
-              const scale = (fieldsW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
-              if (targetH * scale >= 20) {
-                targetH *= scale
-                validPhotos.forEach((photo, idx) => {
-                  photoDims.push({ photo, pW: targetH * aspects[idx], pH: targetH, aspect: aspects[idx] })
-                })
-              } else {
-                shouldStack = true
-                validPhotos.forEach((photo, idx) => {
-                  let pH = 34
-                  let pW = Math.min(fieldsW, pH * aspects[idx])
-                  photoDims.push({ photo, pW, pH, aspect: aspects[idx] })
-                })
-              }
-            } else {
-              validPhotos.forEach((photo, idx) => {
-                photoDims.push({ photo, pW: widths[idx], pH: targetH, aspect: aspects[idx] })
-              })
-            }
-          } else {
-            let targetH = 30
-            const aspects = validPhotos.map(p => (p.aspect && p.aspect > 0 ? p.aspect : 1.33))
-            const widths = aspects.map(a => targetH * a)
-            const totalW = widths.reduce((s, w) => s + w, 0) + (numPhotos - 1) * photoGap
-
-            if (totalW <= maxPhotoAreaW) {
-              validPhotos.forEach((photo, idx) => {
-                photoDims.push({ photo, pW: widths[idx], pH: targetH, aspect: aspects[idx] })
-              })
-            } else {
-              const scale = (maxPhotoAreaW - (numPhotos - 1) * photoGap) / widths.reduce((s, w) => s + w, 0)
-              if (targetH * scale >= 22) {
-                targetH *= scale
-                validPhotos.forEach((photo, idx) => {
-                  photoDims.push({ photo, pW: targetH * aspects[idx], pH: targetH, aspect: aspects[idx] })
-                })
-              } else {
-                shouldStack = true
-                validPhotos.forEach((photo, idx) => {
-                  let pH = 30
-                  let pW = Math.min(maxPhotoAreaW, pH * aspects[idx])
-                  photoDims.push({ photo, pW, pH, aspect: aspects[idx] })
-                })
-              }
-            }
+        // Determine if side-by-side or stacking is needed
+        if (numPhotos > 1) {
+          const totalSideW = photoDims.reduce((sum, d) => sum + d.pW, 0) + (numPhotos - 1) * photoGap
+          if (totalSideW > maxPhotoAreaW) {
+            shouldStack = true
           }
         }
 
@@ -1719,7 +1109,7 @@ export default function PDFPreview() {
           // Dynamic table columns based on enabled Report Field Visibility settings
           const candidateCols = []
           // 1. When Key Plan Snip with Pin is ON, align Key Plan to the LEFT side of the page (Column 1)
-          if (exportFields.keyPlanSnips) candidateCols.push({ id: 'keyPlanSnips', title: 'Drawing location', weight: 1.6, minW: 28 })
+          if (exportFields.keyPlanSnips) candidateCols.push({ id: 'keyPlanSnips', title: 'Key Plan', weight: 1.6, minW: 28 })
           // 2. All other fields after that
           if (exportFields.trade) candidateCols.push({ id: 'trade', title: 'Category', weight: 1.2, minW: 20 })
           if (exportFields.notes) candidateCols.push({ id: 'notes', title: 'Description', weight: 2.4, minW: 32, flex: true })
@@ -1820,30 +1210,67 @@ export default function PDFPreview() {
             // Due Date text
             const dueText = item.dueDate ? formatDatePattern(item.dueDate) : '—'
 
-            // Photos sizing - ALL images related to that pin inside table
+            // Photos sizing - ALL images related to that pin inside table, placed next to each other when space permits
             const validPhotos = colPhotos ? photos.filter(p => !!p.imageData) : []
-            const photoDims = []
+            const photoRows = []
             const photoGap = 2.5
-            let totalPhotoH = 0
+            let totalPhotosH = 0
 
             if (colPhotos && validPhotos.length > 0) {
-              const maxPW = Math.max(16, colPhotos.w - 5)
-              for (const p of validPhotos) {
+              const availW = Math.max(16, colPhotos.w - 5)
+              const baseTargetH = 26
+
+              // Prepare photo items with base dimensions
+              const photoItems = validPhotos.map(p => {
                 const aspect = p.aspect && p.aspect > 0 ? p.aspect : 1.33
-                let pW = Math.min(maxPW, 32)
-                let pH = pW / aspect
-                if (pH > 28) {
-                  pH = 28
-                  pW = pH * aspect
+                let pH = baseTargetH
+                let pW = Math.round(pH * aspect * 10) / 10
+                if (pW > availW) {
+                  pW = availW
+                  pH = Math.round((pW / aspect) * 10) / 10
                 }
-                photoDims.push({ p, pW, pH, aspect })
+                return { p, pW, pH, aspect }
+              })
+
+              // Pack photos into rows next to each other
+              let curRow = []
+              let curRowW = 0
+
+              for (const it of photoItems) {
+                const neededW = curRow.length > 0 ? (curRowW + photoGap + it.pW) : it.pW
+                if (curRow.length > 0 && neededW > availW) {
+                  // Check if slight scaling (down to 74%) allows 2 or 3 photos to fit on this row
+                  const candidateRow = [...curRow, it]
+                  const rawSumW = candidateRow.reduce((s, x) => s + x.pW, 0)
+                  const scale = (availW - (candidateRow.length - 1) * photoGap) / rawSumW
+
+                  if (scale >= 0.74 && candidateRow.length <= 3) {
+                    candidateRow.forEach(x => {
+                      x.pW = Math.round(x.pW * scale * 10) / 10
+                      x.pH = Math.round(x.pH * scale * 10) / 10
+                    })
+                    curRow = candidateRow
+                    curRowW = candidateRow.reduce((s, x) => s + x.pW, 0) + (candidateRow.length - 1) * photoGap
+                  } else {
+                    photoRows.push(curRow)
+                    curRow = [it]
+                    curRowW = it.pW
+                  }
+                } else {
+                  curRow.push(it)
+                  curRowW = neededW
+                }
               }
-              totalPhotoH = photoDims.reduce((sum, d) => sum + d.pH, 0) + (photoDims.length - 1) * photoGap
+              if (curRow.length > 0) {
+                photoRows.push(curRow)
+              }
+
+              totalPhotosH = photoRows.reduce((sum, r) => sum + Math.max(...r.map(x => x.pH)), 0) + (photoRows.length - 1) * photoGap
             }
 
-            // Drawing location snippet sizing
+            // Key Plan snippet sizing
             const cropSize = (colLocation && crop) ? Math.min(28, colLocation.w - 6) : 0
-            const sheetText = `Sheets: ${fp?.name || 'Floor Plan'}`
+            const sheetText = fp?.name || 'Floor Plan'
             doc.setFont(pdfFont, 'normal')
             doc.setFontSize(7.5)
             const sheetLines = colLocation ? doc.splitTextToSize(sheetText, colLocation.w - 4) : []
@@ -1855,7 +1282,7 @@ export default function PDFPreview() {
             if (colStatus) heightList.push(10)
             if (colPriority) heightList.push(10)
             if (colDueDate) heightList.push(10)
-            if (colPhotos) heightList.push(validPhotos.length > 0 ? (totalPhotoH + 5) : 8)
+            if (colPhotos) heightList.push(validPhotos.length > 0 ? (totalPhotosH + 5) : 8)
             if (colLocation) heightList.push(crop ? (cropSize + sheetLines.length * 3.4 + 6) : (sheetLines.length * 3.4 + 6))
 
             const rowH = Math.max(...heightList)
@@ -1940,19 +1367,26 @@ export default function PDFPreview() {
               doc.text(dueText, colDueDate.x + colDueDate.w / 2, y + 6.5, { align: 'center' })
             }
 
-            // Render ALL Photos related to that pin
+            // Render ALL Photos related to that pin (arranged next to each other in rows when space permits)
             if (colPhotos) {
-              if (photoDims.length > 0) {
+              if (photoRows.length > 0) {
                 let curPy = y + 2.5
-                for (const d of photoDims) {
-                  const px = colPhotos.x + (colPhotos.w - d.pW) / 2
-                  try {
-                    doc.addImage(d.p.imageData, 'JPEG', px, curPy, d.pW, d.pH, '', 'FAST')
-                    doc.setDrawColor(203, 213, 225)
-                    doc.setLineWidth(0.2)
-                    doc.rect(px, curPy, d.pW, d.pH)
-                  } catch {}
-                  curPy += d.pH + photoGap
+                for (const row of photoRows) {
+                  const rowW = row.reduce((s, x) => s + x.pW, 0) + (row.length - 1) * photoGap
+                  let curPx = colPhotos.x + (colPhotos.w - rowW) / 2
+                  const rowMaxH = Math.max(...row.map(x => x.pH))
+
+                  for (const d of row) {
+                    try {
+                      const imgY = curPy + (rowMaxH - d.pH) / 2
+                      doc.addImage(d.p.imageData, 'JPEG', curPx, imgY, d.pW, d.pH, '', 'FAST')
+                      doc.setDrawColor(203, 213, 225)
+                      doc.setLineWidth(0.2)
+                      doc.rect(curPx, imgY, d.pW, d.pH)
+                    } catch {}
+                    curPx += d.pW + photoGap
+                  }
+                  curPy += rowMaxH + photoGap
                 }
               } else {
                 doc.setFont(pdfFont, 'normal')
@@ -2395,7 +1829,7 @@ export default function PDFPreview() {
                           id: 'reportAsTable',
                           label: 'Report as Table',
                           tag: 'Table Layout',
-                          sublabel: 'Category, Description, Photos, Drawing location'
+                          sublabel: 'Key Plan, Category, Description, Photos'
                         },
                       ].map(field => {
                         const isChecked = !!exportFields[field.id]
@@ -2457,7 +1891,7 @@ export default function PDFPreview() {
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 block">
                     Export File Format
                   </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <button
                       type="button"
                       onClick={() => setFormat('pdf')}
@@ -2475,6 +1909,27 @@ export default function PDFPreview() {
                       <div>
                         <p className={`font-bold text-sm ${format === 'pdf' ? 'text-brand-900' : 'text-gray-800'}`}>
                           PDF Document
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormat('docx')}
+                      className={`p-3.5 rounded-xl border text-left flex items-center gap-3 transition-all ${
+                        format === 'docx'
+                          ? 'border-brand-500 bg-blue-50/60 shadow-xs ring-1 ring-brand-400'
+                          : 'border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold ${
+                        format === 'docx' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
+                      }`}>
+                        <FileType size={18} />
+                      </div>
+                      <div>
+                        <p className={`font-bold text-sm ${format === 'docx' ? 'text-brand-900' : 'text-gray-800'}`}>
+                          Word Document
                         </p>
                       </div>
                     </button>
@@ -2559,8 +2014,8 @@ export default function PDFPreview() {
                   </div>
                 )}
 
-                {/* PDF Specific Settings */}
-                {format === 'pdf' && (
+                {/* PDF & Word DOCX Specific Settings */}
+                {(format === 'pdf' || format === 'docx') && (
                   <div className="space-y-4 pt-2 border-t border-gray-100">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                       {/* Paper Size */}
@@ -2596,8 +2051,8 @@ export default function PDFPreview() {
                     </div>
                   </div>
                 )}
-                {/* Active Photo Quality Summary (for PDF & Images ZIP) */}
-                {(format === 'pdf' || format === 'zip') && (
+                {/* Active Photo Quality Summary (for PDF, Word DOCX & Images ZIP) */}
+                {(format === 'pdf' || format === 'docx' || format === 'zip') && (
                   <div className="flex items-center justify-between gap-2 flex-wrap px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200/80 text-xs">
                     <div className="flex items-center gap-2 text-gray-700">
                       <ImageIcon size={14} className="text-brand-600 flex-shrink-0" />
@@ -2656,6 +2111,8 @@ export default function PDFPreview() {
               onClick={
                 format === 'pdf'
                   ? handleGeneratePDF
+                  : format === 'docx'
+                  ? handleGenerateDocx
                   : format === 'csv'
                   ? handleGenerateCSV
                   : handleGenerateZip
@@ -2677,6 +2134,11 @@ export default function PDFPreview() {
                 <>
                   <Eye size={16} />
                   <span>Preview &amp; Confirm PDF</span>
+                </>
+              ) : format === 'docx' ? (
+                <>
+                  <Download size={16} />
+                  <span>Download Word (.docx)</span>
                 </>
               ) : format === 'csv' ? (
                 <>

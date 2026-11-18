@@ -17,6 +17,7 @@ import {
   getPhases,
   db,
   getPhotos,
+  savePhoto,
   deletePhoto,
   getCustomTrades,
   saveCustomTrades,
@@ -994,7 +995,6 @@ export default function PunchItemForm() {
 
   async function saveAnnotatedPhoto(annotatedDataUrl) {
     const photoUuid = (annotatingPhoto && annotatingPhoto.uuid) || uuidv4()
-    const { savePhoto, savePunchItem } = await import('../db/database')
 
     // 1. Save photo
     await savePhoto({
