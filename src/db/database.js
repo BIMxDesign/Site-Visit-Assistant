@@ -412,6 +412,12 @@ export async function deletePhase(uuid) {
   for (const fp of fps) {
     await deleteFloorPlan(fp.uuid)
   }
+  // Delete direct observations assigned directly to this report
+  const directItems = await db.punchItems.where('phaseUuid').equals(uuid).toArray()
+  for (const item of directItems) {
+    await db.photos.where('punchItemUuid').equals(item.uuid).delete()
+    await db.punchItems.where('uuid').equals(item.uuid).delete()
+  }
   await db.phases.where('uuid').equals(uuid).delete()
 }
 
@@ -881,6 +887,94 @@ export async function downloadProjectBackup(project) {
 }
 
 /**
+ * Export an individual site visit report (including its key plans, observations, photos, and license).
+ */
+export async function exportReportData(phaseUuid, projectUuid = null) {
+  const phase = await getPhase(phaseUuid)
+  if (!phase) throw new Error('Site visit report not found.')
+
+  const targetProjUuid = phase.projectUuid || projectUuid
+  const project = await getProject(targetProjUuid)
+  if (!project) throw new Error('Parent project for this report was not found.')
+
+  // Fetch all floor plans for this report
+  const allFps = await getFloorPlans(project.uuid)
+  const phases = await getPhases(project.uuid)
+  const isFirstPhase = phases.length > 0 && phases[0].uuid === phase.uuid
+  const floorPlans = allFps.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && isFirstPhase))
+
+  // Fetch all punch items for this report
+  const fpUuids = new Set(floorPlans.map(f => f.uuid))
+  const allItems = await getPunchItems(project.uuid)
+  const items = allItems.filter(i => (i.phaseUuid === phase.uuid) || (i.floorPlanUuid && fpUuids.has(i.floorPlanUuid)))
+
+  // Fetch all photos for these items
+  const photos = []
+  for (const item of items) {
+    const p = await getPhotos(item.uuid)
+    photos.push(...p)
+  }
+
+  // Fetch license information
+  const projectLic = await getProjectLicense(project.uuid)
+  const licenses = projectLic ? [projectLic] : []
+
+  return {
+    app: 'Site Visit Assistant',
+    type: 'individual_report',
+    version: '1.0.0',
+    exportedAt: Date.now(),
+    project: {
+      uuid: project.uuid,
+      name: project.name || '',
+      number: project.number || '',
+      address: project.address || '',
+      client: project.client || '',
+      architect: project.architect || '',
+      isLicensed: project.isLicensed || false,
+      licenseKey: project.licenseKey || null,
+    },
+    phase: {
+      ...phase,
+      updatedAt: phase.updatedAt || phase.createdAt || Date.now(),
+    },
+    floorPlans,
+    items,
+    photos,
+    licenses,
+  }
+}
+
+/**
+ * Downloads an individual site visit report backup (.json) directly or saves to cloud sync folder.
+ */
+export async function downloadReportBackup(phaseUuid, projectUuid = null) {
+  const data = await exportReportData(phaseUuid, projectUuid)
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+
+  const projName = (data.project?.name || 'Project').replace(/[^a-z0-9_-]/gi, '_')
+  const reportName = (data.phase?.name || 'Report').replace(/[^a-z0-9_-]/gi, '_')
+  const dateStr = new Date().toISOString().slice(0, 10)
+  const filename = `${projName}-${reportName}-report-backup-${dateStr}.json`
+
+  const result = await saveBackupToCloud(blob, filename)
+
+  // Log report export
+  try {
+    await logExport({
+      projectUuid: data.project?.uuid || '',
+      projectName: data.project?.name || '',
+      type: 'report_json',
+      reportName: data.phase?.name || 'Report Backup',
+      filename: filename,
+      pageCount: null,
+    })
+  } catch {}
+
+  return result
+}
+
+/**
  * Packages all projects, key plans, observations, photos, and licenses into a JSON blob.
  */
 export async function getAllProjectsBackupBlob(filenamePrefix = 'site-visit-assistant-ALL-PROJECTS-backup') {
@@ -1093,6 +1187,252 @@ export async function importProjectData(data, targetUserEmail = null, asNewCopy 
   await importAndPreserveLicenses(licenses, project)
 
   return project
+}
+
+/**
+ * Imports an individual site visit report into a target project.
+ * - If targetProjectUuid is provided or matches an existing project (by UUID or name), adds the report inside.
+ * - If the parent project does not exist on this device, it automatically creates the parent project.
+ * - If a report with the same name already exists in the project:
+ *    - resolution === 'auto': returns conflict analysis comparing which version is most current.
+ *    - resolution === 'overwrite': replaces existing report data with automatic safety snapshot.
+ *    - resolution === 'duplicate': imports as a new copy named "${name} (Imported)".
+ * - Preserves licenses: if either the target project or the incoming report is licensed, the project/report remains unlocked.
+ */
+export async function importReportData(reportPackage, targetProjectUuid = null, resolution = 'auto') {
+  if (!reportPackage || typeof reportPackage !== 'object') {
+    throw new Error('Invalid report backup data.')
+  }
+  let { project: incomingProject, phase: incomingPhase, floorPlans = [], items = [], photos = [], licenses = [] } = reportPackage
+  if (!incomingPhase || !incomingPhase.name) {
+    throw new Error('Invalid report backup: missing report details.')
+  }
+
+  // 1. Identify Target Project:
+  let targetProject = null
+  if (targetProjectUuid) {
+    targetProject = await getProject(targetProjectUuid)
+  }
+  if (!targetProject && incomingProject?.uuid) {
+    targetProject = await getProject(incomingProject.uuid)
+  }
+  if (!targetProject && incomingProject?.name) {
+    targetProject = await db.projects.filter(p => p.name && p.name.trim().toLowerCase() === incomingProject.name.trim().toLowerCase()).first()
+  }
+
+  // 2. If parent project does NOT exist on this device, create it
+  if (!targetProject) {
+    const newProjUuid = uuidv4()
+    targetProject = {
+      uuid: newProjUuid,
+      name: incomingProject?.name || 'Imported Project',
+      number: incomingProject?.number || '',
+      address: incomingProject?.address || '',
+      client: incomingProject?.client || '',
+      architect: incomingProject?.architect || '',
+      isLicensed: !!incomingProject?.isLicensed || (licenses && licenses.length > 0),
+      licenseKey: incomingProject?.licenseKey || licenses?.[0]?.licenseKey || null,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }
+    await saveProject(targetProject)
+  }
+
+  // 3. Check if a report with matching name (or UUID) already exists in this project
+  const existingPhases = await getPhases(targetProject.uuid)
+  const existingReport = existingPhases.find(
+    p => p.uuid === incomingPhase.uuid ||
+         (p.name && incomingPhase.name && p.name.trim().toLowerCase() === incomingPhase.name.trim().toLowerCase())
+  )
+
+  const existingTimestamp = existingReport ? (existingReport.updatedAt || existingReport.createdAt || 0) : 0
+  const incomingTimestamp = incomingPhase.updatedAt || reportPackage.exportedAt || incomingPhase.createdAt || 0
+  const isIncomingNewer = incomingTimestamp > existingTimestamp
+
+  // If conflict exists and caller did not specify resolution, return conflict details
+  if (existingReport && resolution === 'auto') {
+    const allFps = await getFloorPlans(targetProject.uuid)
+    const existingFps = allFps.filter(f => f.phaseUuid === existingReport.uuid)
+    const fpUuids = new Set(existingFps.map(f => f.uuid))
+    const allItems = await getPunchItems(targetProject.uuid)
+    const existingItems = allItems.filter(i => (i.phaseUuid === existingReport.uuid) || (i.floorPlanUuid && fpUuids.has(i.floorPlanUuid)))
+
+    return {
+      conflict: true,
+      existingProject: targetProject,
+      existingPhase: existingReport,
+      incomingPhase,
+      reportPackage,
+      existingUpdatedAt: existingTimestamp,
+      incomingUpdatedAt: incomingTimestamp,
+      isIncomingNewer,
+      existingPlanCount: existingFps.length,
+      existingItemCount: existingItems.length,
+      incomingPlanCount: floorPlans.length,
+      incomingItemCount: items.length,
+    }
+  }
+
+  // 4. Resolve conflict or insert clean report
+  let targetPhaseUuid
+  let reportName = incomingPhase.name
+
+  if (existingReport && resolution === 'overwrite') {
+    // OVERWRITE:
+    targetPhaseUuid = existingReport.uuid
+    // Safety backup of existing report
+    try {
+      const safety = await exportReportData(existingReport.uuid, targetProject.uuid)
+      await setSetting(`safety_backup_report_${existingReport.uuid}`, {
+        timestamp: Date.now(),
+        reportName: existingReport.name,
+        projectName: targetProject.name,
+        data: safety
+      })
+    } catch (e) {
+      console.warn('Report pre-overwrite snapshot notice:', e)
+    }
+
+    // Cleanly delete old drawings and observations in existingReport
+    const oldFps = (await getFloorPlans(targetProject.uuid)).filter(f => f.phaseUuid === existingReport.uuid)
+    for (const fp of oldFps) {
+      await deleteFloorPlan(fp.uuid)
+    }
+    const oldDirect = (await getPunchItems(targetProject.uuid)).filter(i => i.phaseUuid === existingReport.uuid)
+    for (const it of oldDirect) {
+      await deletePunchItem(it.uuid)
+    }
+
+    // Update phase details
+    const updatedPhase = {
+      ...existingReport,
+      ...incomingPhase,
+      uuid: targetPhaseUuid,
+      projectUuid: targetProject.uuid,
+      order: existingReport.order || incomingPhase.order || 1,
+      updatedAt: Date.now()
+    }
+    await savePhase(updatedPhase)
+  } else if (existingReport && resolution === 'duplicate') {
+    // DUPLICATE:
+    targetPhaseUuid = uuidv4()
+    reportName = incomingPhase.name.endsWith('(Imported)') ? incomingPhase.name : `${incomingPhase.name} (Imported)`
+    const newPhase = {
+      ...incomingPhase,
+      uuid: targetPhaseUuid,
+      projectUuid: targetProject.uuid,
+      name: reportName,
+      order: existingPhases.length + 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }
+    await savePhase(newPhase)
+  } else {
+    // NO CONFLICT (Insert fresh into project):
+    targetPhaseUuid = uuidv4()
+    const newPhase = {
+      ...incomingPhase,
+      uuid: targetPhaseUuid,
+      projectUuid: targetProject.uuid,
+      order: existingPhases.length + 1,
+      createdAt: incomingPhase.createdAt || Date.now(),
+      updatedAt: Date.now()
+    }
+    await savePhase(newPhase)
+  }
+
+  // 5. Insert incoming Floor Plans (Key Plans) with mapped UUIDs
+  const fpMap = {}
+  for (const fp of floorPlans) {
+    const newFpUuid = uuidv4()
+    fpMap[fp.uuid] = newFpUuid
+    const { id: _id, ...cleanFp } = fp
+    const newFp = {
+      ...cleanFp,
+      uuid: newFpUuid,
+      projectUuid: targetProject.uuid,
+      phaseUuid: targetPhaseUuid,
+      createdAt: fp.createdAt || Date.now(),
+      updatedAt: Date.now()
+    }
+    await saveFloorPlan(newFp)
+  }
+
+  // 6. Insert incoming Punch Items with mapped UUIDs
+  const itemMap = {}
+  for (const item of items) {
+    const newItemUuid = uuidv4()
+    itemMap[item.uuid] = newItemUuid
+    const mappedFpUuid = item.floorPlanUuid ? (fpMap[item.floorPlanUuid] || null) : null
+    const { id: _id, ...cleanItem } = item
+    const newItem = {
+      ...cleanItem,
+      uuid: newItemUuid,
+      projectUuid: targetProject.uuid,
+      floorPlanUuid: mappedFpUuid,
+      phaseUuid: targetPhaseUuid,
+      createdAt: item.createdAt || Date.now(),
+      updatedAt: Date.now()
+    }
+    await savePunchItem(newItem)
+  }
+
+  // 7. Insert Photos
+  for (const photo of photos) {
+    const mappedItemUuid = itemMap[photo.punchItemUuid]
+    if (!mappedItemUuid) continue
+    const { id: _id, ...cleanPhoto } = photo
+    const newPhoto = {
+      ...cleanPhoto,
+      uuid: uuidv4(),
+      punchItemUuid: mappedItemUuid,
+      createdAt: photo.createdAt || Date.now()
+    }
+    await savePhoto(newPhoto)
+  }
+
+  // 8. License Preservation:
+  const hasIncomingLic = !!incomingProject?.isLicensed || (licenses && licenses.length > 0)
+  if (targetProject.isLicensed || hasIncomingLic) {
+    const remappedLicenses = (licenses || []).map(lic => ({
+      ...lic,
+      projectUuid: targetProject.uuid,
+      reportUuid: targetPhaseUuid
+    }))
+    await importAndPreserveLicenses(remappedLicenses, targetProject)
+    targetProject.isLicensed = true
+    await saveProject(targetProject)
+  }
+
+  // 9. Resequence pins continuously across drawings
+  try {
+    await resequenceReportPins({ projectUuid: targetProject.uuid, phaseUuid: targetPhaseUuid })
+  } catch (reseqErr) {
+    console.warn('Pins resequencing notice:', reseqErr)
+  }
+
+  // Update project counts
+  const finalItems = await getPunchItems(targetProject.uuid)
+  const openCount = finalItems.filter(i => isObservationOpenStatus(i.status)).length
+  targetProject.totalItems = finalItems.length
+  targetProject.openItems = openCount
+  const finalPhases = await getPhases(targetProject.uuid)
+  targetProject.reportCount = finalPhases.length
+  await saveProject(targetProject)
+
+  const finalPhase = await getPhase(targetPhaseUuid)
+
+  return {
+    status: 'success',
+    mode: existingReport ? resolution : 'added',
+    project: targetProject,
+    targetProject: targetProject,
+    phase: finalPhase || { name: reportName, uuid: targetPhaseUuid },
+    planCount: floorPlans.length,
+    itemCount: items.length,
+    photoCount: photos.length,
+    isLicensed: !!targetProject.isLicensed
+  }
 }
 
 /**

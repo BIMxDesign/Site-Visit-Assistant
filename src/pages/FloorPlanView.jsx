@@ -683,7 +683,6 @@ export default function FloorPlanView() {
         title: 'Status',
         items: [
           { id: 'Status: Open',     label: 'Status: Open' },
-          { id: 'Status: On-Going', label: 'Status: On-Going' },
           { id: 'Status: Closed',   label: 'Status: Closed' },
         ]
       },

@@ -78,10 +78,11 @@ export default function PunchItemForm() {
   // Sibling observations for desktop left/right navigation
   const [siblings,    setSiblings]    = useState([])
 
-  // Report Observation Notes Reuse (Searchable Dropdown)
+  // Report Observation Notes Reuse (Searchable Dropdown across all Site Visits in Project)
   const [reportNotes,       setReportNotes]       = useState([])
   const [reusedSuccessMsg,  setReusedSuccessMsg]  = useState('')
   const [reuseSearch,       setReuseSearch]       = useState('')
+  const [reuseScope,        setReuseScope]        = useState('all') // 'all' | 'current' | 'other'
   const [showReuseDropdown, setShowReuseDropdown] = useState(false)
   const reuseDropdownRef = useRef(null)
 
@@ -219,25 +220,31 @@ export default function PunchItemForm() {
         }
       }
 
-      // Fetch all floor plans in this site visit report to build fpSet and fpMap
+      // Fetch all floor plans in this project
+      const allProjFps = projUuid ? await getFloorPlans(projUuid) : await db.floorPlans.toArray()
+      const allFpMap = new Map(allProjFps.map(f => [f.uuid, f]))
+
+      // Fetch all phases/site visits in this project
+      const allProjPhases = projUuid ? await getPhases(projUuid) : await db.phases.toArray()
+      const phaseMap = new Map(allProjPhases.map(ph => [ph.uuid, ph]))
+
+      // Current report floor plans
       let reportFps = []
       if (pUuid) {
-        reportFps = await getFloorPlansByPhase(pUuid)
-      } else if (projUuid) {
-        reportFps = await getFloorPlans(projUuid)
+        reportFps = allProjFps.filter(f => f.phaseUuid === pUuid)
       } else {
-        reportFps = await db.floorPlans.toArray()
+        reportFps = allProjFps
       }
 
       const fpSet = new Set(reportFps.map(f => f.uuid))
       if (it.floorPlanUuid) fpSet.add(it.floorPlanUuid)
       if (currentFloorPlanUuid) fpSet.add(currentFloorPlanUuid)
-      const fpMap = new Map(reportFps.map(f => [f.uuid, f.name]))
+      const fpMap = new Map(allProjFps.map(f => [f.uuid, f.name]))
 
       // Load all observations in the project (or db)
       const allProjItems = projUuid ? await getPunchItems(projUuid) : await db.punchItems.toArray()
 
-      // Whole Site Visit Report observations:
+      // Whole Site Visit Report observations (current report):
       // Includes all observations in this phase/site visit report (direct or via any of its key plans)
       const wholeReportItems = allProjItems.filter(p => {
         if (pUuid && p.phaseUuid && String(p.phaseUuid).trim() === String(pUuid).trim()) return true
@@ -266,18 +273,43 @@ export default function PunchItemForm() {
       })
       setSiblings(planSiblings)
 
-      // Notes from the WHOLE Site Visit Report (not just current drawing):
-      const validNotes = wholeReportItems
+      // Notes from ALL site visits in this project (searchable & reusable across visits):
+      const validNotes = allProjItems
         .filter(p => p.uuid !== it.uuid && p.notes && stripHtmlToPlainText(p.notes).trim().length > 0)
         .map(p => {
-          const drawingName = fpMap.get(p.floorPlanUuid) || ''
+          const drawing = allFpMap.get(p.floorPlanUuid)
+          const drawingName = drawing?.name || fpMap.get(p.floorPlanUuid) || ''
+
+          let itemPhaseUuid = p.phaseUuid || drawing?.phaseUuid || null
+          if (!itemPhaseUuid && allProjPhases.length > 0) {
+            itemPhaseUuid = allProjPhases[0].uuid
+          }
+          const itemPhase = itemPhaseUuid ? phaseMap.get(itemPhaseUuid) : null
+          const phaseName = itemPhase?.name || (itemPhaseUuid === pUuid ? 'This Report' : 'Site Visit')
+
+          const isCurrentReport = Boolean(
+            (pUuid && itemPhaseUuid && String(itemPhaseUuid).trim() === String(pUuid).trim()) ||
+            (p.floorPlanUuid && fpSet.has(p.floorPlanUuid)) ||
+            (!pUuid)
+          )
+
           return {
             ...p,
             drawingName,
+            phaseUuid: itemPhaseUuid,
+            phaseName,
+            isCurrentReport,
           }
         })
 
+      // Sort notes: current report notes first (by itemNumber), then other site visits (by phase & itemNumber)
       validNotes.sort((a, b) => {
+        if (a.isCurrentReport !== b.isCurrentReport) {
+          return a.isCurrentReport ? -1 : 1
+        }
+        if (a.phaseName !== b.phaseName) {
+          return (a.phaseName || '').localeCompare(b.phaseName || '')
+        }
         const numA = Number(a.itemNumber)
         const numB = Number(b.itemNumber)
         if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
@@ -512,7 +544,7 @@ export default function PunchItemForm() {
     setError('')
     setShowReuseDropdown(false)
     setReuseSearch('')
-    setReusedSuccessMsg(`Appended note from Observation #${found.itemNumber || ''}`)
+    setReusedSuccessMsg(`Appended note from Observation #${found.itemNumber || ''}${found.phaseName && !found.isCurrentReport ? ` (${found.phaseName})` : ''}`)
     setTimeout(() => {
       setReusedSuccessMsg('')
     }, 3500)
@@ -1064,8 +1096,11 @@ export default function PunchItemForm() {
     itemRef.current = updated
   }
 
-  // Filtered notes for keyword search in reuse notes dropdown
+  // Filtered notes for keyword search in reuse notes dropdown across all Site Visits
   const filteredReportNotes = reportNotes.filter(n => {
+    if (reuseScope === 'current' && !n.isCurrentReport) return false
+    if (reuseScope === 'other' && n.isCurrentReport) return false
+
     if (!reuseSearch.trim()) return true
     const q = reuseSearch.toLowerCase().trim()
     const notesMatch = (n.notes || '').toLowerCase().includes(q)
@@ -1073,8 +1108,12 @@ export default function PunchItemForm() {
     const tradeMatch = (n.trade || '').toLowerCase().includes(q)
     const titleMatch = (n.title || '').toLowerCase().includes(q)
     const drawingMatch = (n.drawingName || '').toLowerCase().includes(q)
-    return notesMatch || itemNumMatch || tradeMatch || titleMatch || drawingMatch
+    const phaseMatch = (n.phaseName || '').toLowerCase().includes(q)
+    return notesMatch || itemNumMatch || tradeMatch || titleMatch || drawingMatch || phaseMatch
   })
+
+  const currentReportNotesCount = reportNotes.filter(n => n.isCurrentReport).length
+  const otherReportNotesCount = reportNotes.filter(n => !n.isCurrentReport).length
 
   if (!item) {
     return (
@@ -1498,16 +1537,17 @@ export default function PunchItemForm() {
               )}
             </Field>
 
-            {/* Reuse Observation Note from Same Report (Searchable Dropdown & Combobox) */}
+            {/* Reuse Observation Note from Same Project / Different Site Visits (Searchable Dropdown & Combobox) */}
             <div className="relative" ref={reuseDropdownRef}>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
                   <Copy size={13} className="text-brand-600" />
-                  <span>Reuse Note From This Report</span>
+                  <span>Reuse Note (All Site Visits)</span>
                 </label>
                 {reportNotes.length > 0 && (
                   <span className="text-[11px] text-gray-400 font-normal">
-                    {reportNotes.length} note{reportNotes.length !== 1 ? 's' : ''} available
+                    {reportNotes.length} note{reportNotes.length !== 1 ? 's' : ''} across project
+                    {otherReportNotesCount > 0 && ` (${otherReportNotesCount} from other visits)`}
                   </span>
                 )}
               </div>
@@ -1530,8 +1570,8 @@ export default function PunchItemForm() {
                   }}
                   placeholder={
                     reportNotes.length === 0
-                      ? 'No other observations in this report to reuse'
-                      : 'Search keywords or click to select note from report…'
+                      ? 'No observations in project to reuse'
+                      : 'Search keywords or click to select note from any site visit…'
                   }
                   className={`${INPUT} pl-9 pr-16 bg-white border-brand-200 hover:border-brand-300 focus:border-brand-500 text-xs text-gray-800 disabled:opacity-60 disabled:cursor-not-allowed`}
                 />
@@ -1570,20 +1610,60 @@ export default function PunchItemForm() {
                 <div
                   className="absolute top-full left-0 right-0 mt-1 z-40 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden animate-fade-in"
                   style={{
-                    maxHeight: '260px',
+                    maxHeight: '300px',
                     boxShadow: '0 20px 30px -10px rgba(0, 0, 0, 0.25), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
                   }}
                 >
-                  <div className="p-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
+                  {/* Top Bar with Filter Tabs */}
+                  <div className="p-2 bg-gray-50 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-[11px] text-gray-500">
                     <span className="font-semibold text-gray-700">
-                      {reuseSearch ? `Found ${filteredReportNotes.length} matching notes` : `All ${reportNotes.length} notes in report`}
+                      {reuseSearch ? `Found ${filteredReportNotes.length} matching notes` : `All ${filteredReportNotes.length} notes`}
                     </span>
+                    {otherReportNotesCount > 0 && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setReuseScope('all')}
+                          className={`px-2 py-0.5 rounded-md font-semibold transition-colors cursor-pointer text-[10px] ${
+                            reuseScope === 'all'
+                              ? 'bg-brand-600 text-white'
+                              : 'bg-gray-200/80 text-gray-700 hover:bg-gray-300'
+                          }`}
+                        >
+                          All ({reportNotes.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReuseScope('current')}
+                          className={`px-2 py-0.5 rounded-md font-semibold transition-colors cursor-pointer text-[10px] ${
+                            reuseScope === 'current'
+                              ? 'bg-brand-600 text-white'
+                              : 'bg-gray-200/80 text-gray-700 hover:bg-gray-300'
+                          }`}
+                        >
+                          This Report ({currentReportNotesCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReuseScope('other')}
+                          className={`px-2 py-0.5 rounded-md font-semibold transition-colors cursor-pointer text-[10px] ${
+                            reuseScope === 'other'
+                              ? 'bg-brand-600 text-white'
+                              : 'bg-gray-200/80 text-gray-700 hover:bg-gray-300'
+                          }`}
+                        >
+                          Other Visits ({otherReportNotesCount})
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="overflow-y-auto max-h-[210px] divide-y divide-gray-100">
+                  <div className="overflow-y-auto max-h-[240px] divide-y divide-gray-100">
                     {filteredReportNotes.length === 0 ? (
                       <div className="p-4 text-center text-xs text-gray-500">
-                        No notes found matching "{reuseSearch}"
+                        {reuseSearch
+                          ? `No notes found matching "${reuseSearch}"`
+                          : 'No notes available in this view'}
                       </div>
                     ) : (
                       filteredReportNotes.map(n => {
@@ -1606,9 +1686,23 @@ export default function PunchItemForm() {
                                 <span className="text-xs font-bold text-gray-800">
                                   Observation #{n.itemNumber}
                                 </span>
+                                {n.phaseName && (
+                                  <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-medium border ${
+                                    n.isCurrentReport
+                                      ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                                  }`}>
+                                    {n.isCurrentReport ? 'This Report' : n.phaseName}
+                                  </span>
+                                )}
                                 {n.drawingName && (
                                   <span className="text-[10px] px-1.5 py-0.2 rounded-md font-medium bg-blue-50 text-blue-700 border border-blue-200">
                                     {n.drawingName}
+                                  </span>
+                                )}
+                                {n.trade && n.trade !== 'General' && (
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded-md font-medium bg-gray-100 text-gray-600">
+                                    {n.trade}
                                   </span>
                                 )}
                               </div>

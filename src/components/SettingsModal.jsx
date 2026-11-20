@@ -34,11 +34,13 @@ import {
   downloadProjectBackup, downloadAllProjectsBackup, getAllProjectsBackupBlob, importProjectData, mergeProjectData,
   getSafetyBackup, restoreSafetyBackup, exportProjectData, getPhases, getPunchItems, updateUserProfile,
   getExportLogs, getAllExportLogSummaries, getAllExportLogsFlat,
+  importReportData,
 } from '../db/database'
 import { Field, INPUT, Spinner } from './NewProjectModal'
 import EditProjectModal from './EditProjectModal'
 import LicenseActivationModal from './LicenseActivationModal'
 import DeleteProjectModal from './DeleteProjectModal'
+import ReportConflictModal from './ReportConflictModal'
 import {
   getLicensedProjectUuids,
   getCachedLicenses,
@@ -116,6 +118,7 @@ export default function SettingsModal() {
   const [exportingId,   setExportingId]   = useState(null)
   const [importing,     setImporting]     = useState(false)
   const [importConflictData, setImportConflictData] = useState(null)
+  const [reportConflictData, setReportConflictData] = useState(null)
   const [copiedKeyUuid, setCopiedKeyUuid] = useState(null)
   const [showImportNotes, setShowImportNotes] = useState(true)
   const { canInstall, isInstalled, isOffline, isElectron, isPersistent, storageInfo, installApp } = usePwa()
@@ -724,6 +727,29 @@ export default function SettingsModal() {
         return
       }
 
+      // Handle Individual Site Visit Report Backup (.json)
+      if (data.type === 'individual_report' || (data.phase && !data.phases && !data.projects)) {
+        const res = await importReportData(data, null, 'auto')
+        if (res && res.conflict) {
+          setReportConflictData(res)
+          setImporting(false)
+          return
+        }
+
+        await loadProjects()
+        reloadLicenses()
+        setImporting(false)
+        alert(
+          `Site Visit Report "${res.phase?.name || data.phase?.name}" Successfully Imported!\n\n` +
+          `• Added to Project: "${res.targetProject?.name || res.project?.name || data.project?.name}"\n` +
+          `• ${res.planCount || 0} Key Plans\n` +
+          `• ${res.itemCount || 0} Observations\n` +
+          `• ${res.photoCount || 0} Photos\n` +
+          (res.isLicensed ? '• Active License Preserved (Exports Unlocked)' : '')
+        )
+        return
+      }
+
       if (!data || !data.project || !data.project.name) {
         alert('Invalid project backup file format.')
         setImporting(false)
@@ -808,10 +834,6 @@ export default function SettingsModal() {
 
   // Execute clean overwrite with automatic safety snapshot (Zero Data Loss)
   async function executeOverwrite(data, targetUuid) {
-    const projName = importConflictData?.existingProject?.name || data.project?.name || 'this project'
-    if (!window.confirm(`Are you sure you want to replace "${projName}" with this backup?\n\nAn automatic safety restore snapshot will be saved first so your current project can be restored at any time.`)) {
-      return
-    }
     setImporting(true)
     try {
       const importedProj = await importProjectData(data, null, false, targetUuid)
@@ -829,6 +851,53 @@ export default function SettingsModal() {
     } catch (err) {
       console.error('Overwrite failed:', err)
       alert(`Overwrite failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Handle resolving individual report conflict: Overwrite
+  const handleResolveReportConflictOverwrite = async () => {
+    if (!reportConflictData) return
+    setImporting(true)
+    try {
+      const res = await importReportData(reportConflictData.reportPackage, reportConflictData.existingProject.uuid, 'overwrite')
+      await loadProjects()
+      reloadLicenses()
+      setReportConflictData(null)
+      alert(
+        `Site Visit Report "${res.phase?.name}" replaced successfully!\n\n` +
+        `• Project: "${res.targetProject?.name || res.project?.name}"\n` +
+        `• ${res.planCount || 0} Key Plans\n` +
+        `• ${res.itemCount || 0} Observations\n` +
+        `• Safety restore snapshot automatically created\n` +
+        (res.isLicensed ? '• Active License Preserved (Exports Unlocked)' : '')
+      )
+    } catch (err) {
+      alert(`Overwrite failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Handle resolving individual report conflict: Duplicate
+  const handleResolveReportConflictDuplicate = async () => {
+    if (!reportConflictData) return
+    setImporting(true)
+    try {
+      const res = await importReportData(reportConflictData.reportPackage, reportConflictData.existingProject.uuid, 'duplicate')
+      await loadProjects()
+      reloadLicenses()
+      setReportConflictData(null)
+      alert(
+        `Site Visit Report "${res.phase?.name}" imported as duplicate copy!\n\n` +
+        `• Project: "${res.targetProject?.name || res.project?.name}"\n` +
+        `• ${res.planCount || 0} Key Plans\n` +
+        `• ${res.itemCount || 0} Observations\n` +
+        (res.isLicensed ? '• Active License Preserved (Exports Unlocked)' : '')
+      )
+    } catch (err) {
+      alert(`Duplicate import failed: ${err.message || 'Unknown error'}`)
     } finally {
       setImporting(false)
     }
@@ -2733,6 +2802,17 @@ export default function SettingsModal() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Individual Site Visit Report Conflict Resolution Modal */}
+      {reportConflictData && (
+        <ReportConflictModal
+          conflictData={reportConflictData}
+          onOverwrite={handleResolveReportConflictOverwrite}
+          onDuplicate={handleResolveReportConflictDuplicate}
+          onClose={() => setReportConflictData(null)}
+          loading={importing}
+        />
       )}
 
       {/* Firebase Setup & Connection Modal */}

@@ -5,7 +5,8 @@ import {
   Download, Share2, Edit2, Filter, Check, ClipboardList,
   ChevronDown, ChevronUp, MapPin, Calendar, CloudSun, Users,
   GripVertical, Layers, ListOrdered, FolderOpen, Camera, User, Home,
-  Search, X, Copy, ZoomIn, ZoomOut, Maximize2
+  Search, X, Copy, ZoomIn, ZoomOut, Maximize2, Upload, FileDown,
+  AlertTriangle, CheckSquare
 } from 'lucide-react'
 import { v4 as uuidv4 } from 'uuid'
 import { useAppStore } from '../store/useAppStore'
@@ -15,16 +16,18 @@ import {
   getFloorPlans, deleteFloorPlan, sortFloorPlans, reorderFloorPlans, saveFloorPlan,
   getPunchItems, deletePunchItem, resequenceReportPins, savePunchItem, getNextItemNumber,
   ensureProjectPhases, deletePhase, savePhase,
-  getPhotos, savePhoto
+  getPhotos, savePhoto,
+  exportReportData, downloadReportBackup, importReportData
 } from '../db/database'
 import FloorPlanThumbnail from '../components/FloorPlanThumbnail'
 import FloorPlanManagerModal from '../components/FloorPlanManagerModal'
 import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
 import EditProjectModal from '../components/EditProjectModal'
 import PhaseModal from '../components/PhaseModal'
+import ReportConflictModal from '../components/ReportConflictModal'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ObservationStatusSelect from '../components/ObservationStatusSelect'
-import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern, normalizeObservationStatus, stripHtmlToPlainText } from '../utils/formatters'
+import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern, normalizeObservationStatus, isObservationOpenStatus, stripHtmlToPlainText } from '../utils/formatters'
 import { hexToRgb } from '../utils/theme'
 
 const REPORT_FILTER_OPTIONS = [
@@ -89,8 +92,9 @@ export default function ProjectDetail() {
     })
   }
   const [targetPhaseUuid, setTargetPhaseUuid] = useState(null)
-  const [filter,        setFilter]        = useState('All')
+  const [filter,        setFilter]        = useState('Date (Newest)')
   const [showFilter,    setShowFilter]    = useState(false)
+  const [punchItemFilter, setPunchItemFilter] = useState('all') // 'all' | 'open' | 'closed' | 'dueDate' | 'priority'
   const [fabOpen,       setFabOpen]       = useState(false)
   const fabTimerRef = useRef(null)
 
@@ -190,10 +194,33 @@ export default function ProjectDetail() {
       })
     }
 
+    const getVisitTimestamp = (phase) => {
+      if (!phase) return 0
+      if (phase.visitDate) {
+        const timePart = phase.visitTime ? `T${phase.visitTime}` : 'T00:00:00'
+        const fullDateStr = phase.visitDate.includes('T') ? phase.visitDate : `${phase.visitDate}${timePart}`
+        const t = new Date(fullDateStr).getTime()
+        if (!isNaN(t)) return t
+        const fallback = new Date(phase.visitDate).getTime()
+        if (!isNaN(fallback)) return fallback
+      }
+      return phase.createdAt || phase.updatedAt || 0
+    }
+
     if (filter === 'Date (Newest)') {
-      list.sort((a, b) => (b.visitDate || '').localeCompare(a.visitDate || ''))
+      list.sort((a, b) => {
+        const timeA = getVisitTimestamp(a)
+        const timeB = getVisitTimestamp(b)
+        if (timeA !== timeB) return timeB - timeA
+        return (b.createdAt || 0) - (a.createdAt || 0) || (b.order || 0) - (a.order || 0)
+      })
     } else if (filter === 'Date (Oldest)') {
-      list.sort((a, b) => (a.visitDate || '').localeCompare(b.visitDate || ''))
+      list.sort((a, b) => {
+        const timeA = getVisitTimestamp(a)
+        const timeB = getVisitTimestamp(b)
+        if (timeA !== timeB) return timeA - timeB
+        return (a.createdAt || 0) - (b.createdAt || 0) || (a.order || 0) - (b.order || 0)
+      })
     } else if (filter === 'Name (A-Z)') {
       list.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }))
     } else if (filter === 'Name (Z-A)') {
@@ -226,6 +253,28 @@ export default function ProjectDetail() {
     })
     return list
   }, [filteredPhases, floorPlans, punchItems, galleryPhotos, phases])
+
+  // Aggregate project metrics for top status cards
+  const openItemsCount = useMemo(() => {
+    return punchItems.filter(i => isObservationOpenStatus(i.status)).length
+  }, [punchItems])
+
+  const closedItemsCount = useMemo(() => {
+    return punchItems.filter(i => normalizeObservationStatus(i.status) === 'Closed').length
+  }, [punchItems])
+
+  const itemsWithDueDateCount = useMemo(() => {
+    return punchItems.filter(i => Boolean(i.dueDate && i.dueDate.trim())).length
+  }, [punchItems])
+
+  const overdueCount = useMemo(() => {
+    const todayStr = new Date().toISOString().slice(0, 10)
+    return punchItems.filter(i => isObservationOpenStatus(i.status) && i.dueDate && i.dueDate.trim() < todayStr).length
+  }, [punchItems])
+
+  const highPriorityCount = useMemo(() => {
+    return punchItems.filter(i => i.priority === 'High' || i.priority === 'Critical').length
+  }, [punchItems])
 
   // Active photo in lightbox
   const activePreviewPhoto = useMemo(() => {
@@ -842,6 +891,109 @@ export default function ProjectDetail() {
     }
   }
 
+  const [reportConflictData, setReportConflictData] = useState(null)
+  const [importingReport, setImportingReport] = useState(false)
+  const [exportingReportUuid, setExportingReportUuid] = useState(null)
+  const reportFileInputRef = useRef(null)
+
+  const handleExportReport = async (phase) => {
+    if (!phase?.uuid) return
+    setExportingReportUuid(phase.uuid)
+    try {
+      await downloadReportBackup(phase.uuid, currentProjectUuid)
+    } catch (err) {
+      console.error('Failed to export report backup:', err)
+      alert(`Export report failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setExportingReportUuid(null)
+    }
+  }
+
+  const handleImportReportFile = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    e.target.value = ''
+    setImportingReport(true)
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+
+      if (!data || (!data.phase && !data.project)) {
+        alert('Invalid report backup file. Please select a valid Site Visit Report (.json) file.')
+        setImportingReport(false)
+        return
+      }
+
+      if (data.projects || (data.phases && Array.isArray(data.phases))) {
+        alert('This is a full multi-report project backup. Please import it from Settings → Stored Projects to restore the full project.')
+        setImportingReport(false)
+        return
+      }
+
+      const res = await importReportData(data, currentProjectUuid, 'auto')
+      if (res && res.conflict) {
+        setReportConflictData(res)
+        setImportingReport(false)
+        return
+      }
+
+      await load()
+      alert(
+        `Site Visit Report "${res.phase?.name || data.phase?.name}" successfully imported!\n\n` +
+        `• ${res.planCount || 0} Key Plans\n` +
+        `• ${res.itemCount || 0} Observations\n` +
+        `• ${res.photoCount || 0} Photos\n` +
+        (res.isLicensed ? '• Active License Preserved (Exports Unlocked)' : '')
+      )
+    } catch (err) {
+      console.error('Import report failed:', err)
+      alert(`Import report failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImportingReport(false)
+    }
+  }
+
+  const handleResolveConflictOverwrite = async () => {
+    if (!reportConflictData) return
+    setImportingReport(true)
+    try {
+      const res = await importReportData(reportConflictData.reportPackage, currentProjectUuid, 'overwrite')
+      await load()
+      setReportConflictData(null)
+      alert(
+        `Report "${res.phase?.name}" replaced successfully!\n\n` +
+        `• ${res.planCount || 0} Key Plans\n` +
+        `• ${res.itemCount || 0} Observations\n` +
+        `• Automatic safety restore snapshot created\n` +
+        (res.isLicensed ? '• Active License Preserved (Exports Unlocked)' : '')
+      )
+    } catch (err) {
+      alert(`Overwrite failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImportingReport(false)
+    }
+  }
+
+  const handleResolveConflictDuplicate = async () => {
+    if (!reportConflictData) return
+    setImportingReport(true)
+    try {
+      const res = await importReportData(reportConflictData.reportPackage, currentProjectUuid, 'duplicate')
+      await load()
+      setReportConflictData(null)
+      alert(
+        `Report "${res.phase?.name}" imported as duplicate copy!\n\n` +
+        `• ${res.planCount || 0} Key Plans\n` +
+        `• ${res.itemCount || 0} Observations\n` +
+        (res.isLicensed ? '• Active License Preserved (Exports Unlocked)' : '')
+      )
+    } catch (err) {
+      alert(`Duplicate import failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImportingReport(false)
+    }
+  }
+
   if (loading) return <LoadingScreen />
   if (!project) return null
 
@@ -875,14 +1027,12 @@ export default function ProjectDetail() {
           </button>
           <div className="flex-1 min-w-0 flex flex-col justify-center">
             {activePhase ? (
-              <>
-                <h1 className="font-extrabold text-base sm:text-lg leading-tight truncate text-white drop-shadow-xs">
-                  Observations
-                </h1>
-                <p className="text-white/85 text-xs sm:text-sm leading-tight mt-0.5 truncate font-medium">
-                  {activePhase.name}
-                </p>
-              </>
+              <h1
+                className="font-extrabold text-xs sm:text-sm md:text-base leading-[1.15] line-clamp-2 break-words text-white drop-shadow-xs"
+                title={activePhase.name}
+              >
+                {activePhase.name}
+              </h1>
             ) : (
               <>
                 <h1 className="font-extrabold text-base sm:text-lg leading-tight truncate text-white drop-shadow-xs">
@@ -920,6 +1070,20 @@ export default function ProjectDetail() {
                   </button>
                 )}
               </div>
+
+              {/* Export Individual Report Backup */}
+              <button
+                onClick={() => handleExportReport(activePhase)}
+                disabled={exportingReportUuid === activePhase?.uuid}
+                className="liquid-glass-btn min-h-[40px] px-2.5 py-1 rounded-xl transition-all flex items-center justify-center gap-1.5 text-white flex-shrink-0 cursor-pointer active:scale-95"
+                title="Export Site Visit Backup (.json)"
+              >
+                <Download size={16} className={`flex-shrink-0 ${exportingReportUuid === activePhase?.uuid ? 'animate-bounce' : ''}`} />
+                <div className="flex flex-col text-left leading-[1.05]">
+                  <span className="text-[11px] font-bold tracking-tight">Export</span>
+                  <span className="text-[11px] font-bold tracking-tight text-white/90">Report</span>
+                </div>
+              </button>
 
               {/* Yellow Box: Generate Report Button with Report text below Generate for concise width */}
               <button
@@ -1037,84 +1201,88 @@ export default function ProjectDetail() {
                   )}
                 </button>
 
-                {/* 2. Key Plans Tab Button */}
+                {/* 2. Status Type Button (Open & Closed Counts) */}
                 <button
                   type="button"
-                  onClick={() => setOverviewTab('keyplans')}
+                  onClick={() => {
+                    setOverviewTab('punchitems')
+                    setPunchItemFilter(f => (f === 'open' ? 'closed' : f === 'closed' ? 'all' : 'open'))
+                  }}
                   className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
-                    overviewTab === 'keyplans'
-                      ? 'shadow-md ring-2'
-                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 shadow-2xs hover:shadow-xs'
+                    overviewTab === 'punchitems' && (punchItemFilter === 'open' || punchItemFilter === 'closed')
+                      ? 'bg-rose-50/90 border-rose-400 shadow-md ring-2 ring-rose-500/30'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-rose-200 shadow-2xs hover:shadow-xs'
                   }`}
-                  style={
-                    overviewTab === 'keyplans'
-                      ? {
-                          background: 'linear-gradient(135deg, rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1) 0%, rgba(255, 255, 255, 0.95) 100%)',
-                          borderColor: 'var(--punch-pin-color, #a40e26)',
-                          boxShadow: '0 4px 14px -2px rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.25)',
-                        }
-                      : {}
-                  }
-                  title="View key plan drawings gallery"
+                  title="View punch items filtered by Open / Closed status"
                 >
                   <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
-                    <FileImage size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
-                    <span style={overviewTab === 'keyplans' ? { color: 'var(--punch-pin-color, #a40e26)', fontWeight: 700 } : {}}>Key Plans</span>
+                    <CheckSquare size={14} className="text-brand-600 stroke-[2.2]" />
+                    <span className={overviewTab === 'punchitems' && (punchItemFilter === 'open' || punchItemFilter === 'closed') ? 'text-brand-900 font-bold' : ''}>Status</span>
                   </div>
-                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{floorPlans.length}</p>
-                  {overviewTab === 'keyplans' && (
-                    <div className="w-8 h-1 rounded-full mt-1 animate-fade-in" style={{ background: 'var(--punch-pin-color, #a40e26)' }} />
+                  <div className="flex items-center justify-center gap-1 mt-1.5 flex-wrap">
+                    <span className="text-xs sm:text-sm font-black text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-lg leading-none">
+                      {openItemsCount} Open
+                    </span>
+                    <span className="text-xs sm:text-sm font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-lg leading-none">
+                      {closedItemsCount} Closed
+                    </span>
+                  </div>
+                  {overviewTab === 'punchitems' && (punchItemFilter === 'open' || punchItemFilter === 'closed') && (
+                    <div className="w-8 h-1 rounded-full bg-rose-600 mt-1 animate-fade-in" />
                   )}
                 </button>
 
-                {/* 3. Punch Items Tab Button */}
+                {/* 3. Due Date Button */}
                 <button
                   type="button"
-                  onClick={() => setOverviewTab('punchitems')}
+                  onClick={() => {
+                    setOverviewTab('punchitems')
+                    setPunchItemFilter(f => (f === 'dueDate' ? 'all' : 'dueDate'))
+                  }}
                   className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
-                    overviewTab === 'punchitems'
-                      ? 'shadow-md ring-2'
-                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 shadow-2xs hover:shadow-xs'
+                    overviewTab === 'punchitems' && punchItemFilter === 'dueDate'
+                      ? 'bg-blue-50/90 border-blue-400 shadow-md ring-2 ring-blue-500/30'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-blue-200 shadow-2xs hover:shadow-xs'
                   }`}
-                  style={
-                    overviewTab === 'punchitems'
-                      ? {
-                          background: 'linear-gradient(135deg, rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.1) 0%, rgba(255, 255, 255, 0.95) 100%)',
-                          borderColor: 'var(--punch-pin-color, #a40e26)',
-                          boxShadow: '0 4px 14px -2px rgba(var(--punch-pin-color-rgb, 164, 14, 38), 0.25)',
-                        }
-                      : {}
-                  }
-                  title="View all punch list items"
+                  title="View punch items with assigned due dates"
                 >
                   <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
-                    <AlertCircle size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
-                    <span style={overviewTab === 'punchitems' ? { color: 'var(--punch-pin-color, #a40e26)', fontWeight: 700 } : {}}>Punch Items</span>
+                    <Calendar size={14} className="text-blue-600 stroke-[2.2]" />
+                    <span className={overviewTab === 'punchitems' && punchItemFilter === 'dueDate' ? 'text-blue-900 font-bold' : ''}>Due Date</span>
                   </div>
-                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{punchItems.length}</p>
-                  {overviewTab === 'punchitems' && (
-                    <div className="w-8 h-1 rounded-full mt-1 animate-fade-in" style={{ background: 'var(--punch-pin-color, #a40e26)' }} />
+                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{itemsWithDueDateCount}</p>
+                  <span className="text-[10px] text-blue-700 font-bold bg-blue-50 px-1.5 py-0.2 rounded-md border border-blue-200 mt-0.5">
+                    {overdueCount > 0 ? `${overdueCount} Overdue` : `${itemsWithDueDateCount === 1 ? '1 Item' : `${itemsWithDueDateCount} Items`}`}
+                  </span>
+                  {overviewTab === 'punchitems' && punchItemFilter === 'dueDate' && (
+                    <div className="w-8 h-1 rounded-full bg-blue-600 mt-1 animate-fade-in" />
                   )}
                 </button>
 
-                {/* 4. Images Tab Button */}
+                {/* 4. Priority Button */}
                 <button
                   type="button"
-                  onClick={() => setOverviewTab('images')}
+                  onClick={() => {
+                    setOverviewTab('punchitems')
+                    setPunchItemFilter(f => (f === 'priority' ? 'all' : 'priority'))
+                  }}
                   className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
-                    overviewTab === 'images'
-                      ? 'bg-emerald-50/90 border-emerald-400 shadow-md ring-2 ring-emerald-500/30'
-                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-emerald-200 shadow-2xs hover:shadow-xs'
+                    overviewTab === 'punchitems' && punchItemFilter === 'priority'
+                      ? 'bg-amber-50/90 border-amber-400 shadow-md ring-2 ring-amber-500/30'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-amber-200 shadow-2xs hover:shadow-xs'
                   }`}
-                  title="View all observation photos gallery"
+                  title="View punch items filtered by high / critical priority"
                 >
                   <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
-                    <Camera size={14} className="text-emerald-600 stroke-[2.2]" />
-                    <span className={overviewTab === 'images' ? 'text-emerald-900 font-bold' : ''}>Images</span>
+                    <AlertTriangle size={14} className="text-amber-600 stroke-[2.2]" />
+                    <span className={overviewTab === 'punchitems' && punchItemFilter === 'priority' ? 'text-amber-900 font-bold' : ''}>Priority</span>
                   </div>
-                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{totalPhotos}</p>
-                  {overviewTab === 'images' && (
-                    <div className="w-8 h-1 rounded-full bg-emerald-600 mt-1 animate-fade-in" />
+                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{highPriorityCount}</p>
+                  <span className="text-[10px] text-amber-800 font-bold bg-amber-50 px-1.5 py-0.2 rounded-md border border-amber-200 mt-0.5">
+                    High / Critical
+                  </span>
+                  {overviewTab === 'punchitems' && punchItemFilter === 'priority' && (
+                    <div className="w-8 h-1 rounded-full bg-amber-600 mt-1 animate-fade-in" />
                   )}
                 </button>
               </div>
@@ -1429,15 +1597,15 @@ export default function ProjectDetail() {
             /* ── All Reports View: Interactive Switcher Content (Site Visits, Key Plans, Punch Items, Images) ── */
             overviewTab === 'sitevisits' ? (
               <div className="space-y-3">
-              {(filter !== 'All' || siteVisitSearchQuery) && (
+              {(siteVisitSearchQuery || filter === 'Key Plans' || filter === 'List Only') && (
                 <div className="flex items-center justify-between px-1 text-xs text-gray-500">
                   <span>
-                    {filter !== 'All' && <>Filtered: <strong className="text-gray-800">{REPORT_FILTER_OPTIONS.find(o => o.id === filter)?.label || filter}</strong> </>}
+                    {(filter === 'Key Plans' || filter === 'List Only') && <>Filtered: <strong className="text-gray-800">{REPORT_FILTER_OPTIONS.find(o => o.id === filter)?.label || filter}</strong> </>}
                     {siteVisitSearchQuery && <>Search: <strong className="text-gray-800">"{siteVisitSearchQuery}"</strong> </>}
                     ({filteredPhases.length})
                   </span>
                   <button
-                    onClick={() => { setFilter('All'); setSiteVisitSearchQuery('') }}
+                    onClick={() => { setFilter('Date (Newest)'); setSiteVisitSearchQuery('') }}
                     className="text-brand-700 hover:underline font-semibold cursor-pointer"
                   >
                     Clear Filter
@@ -1473,7 +1641,7 @@ export default function ProjectDetail() {
                     </button>
                   ) : (
                     <button
-                      onClick={() => { setFilter('All'); setSiteVisitSearchQuery('') }}
+                      onClick={() => { setFilter('Date (Newest)'); setSiteVisitSearchQuery('') }}
                       className="text-xs text-brand-700 font-semibold mt-3 hover:underline cursor-pointer"
                     >
                       Show all site visits
@@ -1545,6 +1713,18 @@ export default function ProjectDetail() {
                           </div>
 
                           <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleExportReport(phase)
+                              }}
+                              disabled={exportingReportUuid === phase.uuid}
+                              className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-purple-700 flex items-center justify-center cursor-pointer transition-colors"
+                              aria-label="Export site visit backup"
+                              title="Export site visit backup (.json)"
+                            >
+                              <Download size={15} className={exportingReportUuid === phase.uuid ? 'animate-bounce' : ''} />
+                            </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1753,13 +1933,80 @@ export default function ProjectDetail() {
                     </button>
                   </div>
                 ) : (
-                  <div className="space-y-5">
-                    {filteredPhases.map((phase, pIdx) => {
-                      const phaseFps = floorPlans.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && phase === phases[0]))
-                      const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
-                      const phaseItems = punchItems
-                        .filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
-                        .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
+                  <div className="space-y-4">
+                    {/* Filter Pills for Punch Items View */}
+                    <div className="flex items-center gap-1.5 flex-wrap px-1 pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setPunchItemFilter('all')}
+                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          punchItemFilter === 'all'
+                            ? 'bg-brand-700 text-white shadow-sm'
+                            : 'bg-white/80 text-gray-600 hover:bg-white border border-gray-200'
+                        }`}
+                      >
+                        All ({punchItems.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPunchItemFilter('open')}
+                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          punchItemFilter === 'open'
+                            ? 'bg-rose-600 text-white shadow-sm'
+                            : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
+                        }`}
+                      >
+                        Open ({openItemsCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPunchItemFilter('closed')}
+                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          punchItemFilter === 'closed'
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                        }`}
+                      >
+                        Closed ({closedItemsCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPunchItemFilter('dueDate')}
+                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          punchItemFilter === 'dueDate'
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                        }`}
+                      >
+                        Due Date ({itemsWithDueDateCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPunchItemFilter('priority')}
+                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          punchItemFilter === 'priority'
+                            ? 'bg-amber-600 text-white shadow-sm'
+                            : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
+                        }`}
+                      >
+                        High Priority ({highPriorityCount})
+                      </button>
+                    </div>
+
+                    <div className="space-y-5">
+                      {filteredPhases.map((phase, pIdx) => {
+                        const phaseFps = floorPlans.filter(f => f.phaseUuid === phase.uuid || (!f.phaseUuid && phase === phases[0]))
+                        const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
+                        const phaseItems = punchItems
+                          .filter(i => (i.phaseUuid === phase.uuid || phaseFpUuids.has(i.floorPlanUuid)))
+                          .filter(i => {
+                            if (punchItemFilter === 'open') return isObservationOpenStatus(i.status)
+                            if (punchItemFilter === 'closed') return normalizeObservationStatus(i.status) === 'Closed'
+                            if (punchItemFilter === 'dueDate') return Boolean(i.dueDate && i.dueDate.trim())
+                            if (punchItemFilter === 'priority') return i.priority === 'High' || i.priority === 'Critical'
+                            return true
+                          })
+                          .sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
 
                       if (phaseItems.length === 0) return null
 
@@ -1803,6 +2050,7 @@ export default function ProjectDetail() {
                         </div>
                       )
                     })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1939,15 +2187,27 @@ export default function ProjectDetail() {
               Add Observation
             </button>
           ) : (
-            <button
-              onClick={() => { setEditingPhase(null); setShowPhaseModal(true) }}
-              className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm cursor-pointer"
-              style={{ background: 'var(--brand-button, #a40e26)' }}
-              title="Create a new site visit"
-            >
-              <Plus size={20} />
-              New Site Visit
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => reportFileInputRef.current?.click()}
+                disabled={importingReport}
+                className="sitepunch-fab flex items-center gap-1.5 bg-white/95 hover:bg-white text-purple-900 border border-purple-200 hover:border-purple-300 active:scale-95 px-4 py-3 rounded-full shadow-lg transition-all font-bold text-xs sm:text-sm cursor-pointer"
+                title="Import Site Visit Report Backup (.json)"
+              >
+                <Upload size={16} className={importingReport ? 'animate-spin' : ''} />
+                <span>Import Report</span>
+              </button>
+              <button
+                onClick={() => { setEditingPhase(null); setShowPhaseModal(true) }}
+                className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm cursor-pointer"
+                style={{ background: 'var(--brand-button, #a40e26)' }}
+                title="Create a new site visit"
+              >
+                <Plus size={20} />
+                New Site Visit
+              </button>
+            </div>
           )
         ) : (
           <div
@@ -2264,6 +2524,26 @@ export default function ProjectDetail() {
             )}
           </div>
         </div>
+      )}
+
+      {/* Hidden file input for importing an individual Site Visit Report backup */}
+      <input
+        ref={reportFileInputRef}
+        type="file"
+        accept=".json,application/json"
+        onChange={handleImportReportFile}
+        className="hidden"
+      />
+
+      {/* Individual Report Conflict Resolution Modal */}
+      {reportConflictData && (
+        <ReportConflictModal
+          conflictData={reportConflictData}
+          onOverwrite={handleResolveConflictOverwrite}
+          onDuplicate={handleResolveConflictDuplicate}
+          onClose={() => setReportConflictData(null)}
+          loading={importingReport}
+        />
       )}
     </div>
   )
