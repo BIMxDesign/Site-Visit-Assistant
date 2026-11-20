@@ -221,7 +221,7 @@ export default function Dashboard() {
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full">
+        <div className="flex items-center justify-between h-[46px] min-h-[46px] max-w-4xl mx-auto w-full">
           <div className="flex items-center gap-3.5 min-w-0">
             {companyLogo && (
               <img

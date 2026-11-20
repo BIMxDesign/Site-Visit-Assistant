@@ -180,7 +180,7 @@ export default function ProjectsView() {
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center gap-2 min-h-[44px] max-w-4xl mx-auto w-full">
+        <div className="flex items-center gap-2 h-[46px] min-h-[46px] max-w-4xl mx-auto w-full">
           {/* Yellow Box: Back Arrow Button like report page */}
           <button
             onClick={navigateToDashboard}
@@ -191,7 +191,7 @@ export default function ProjectsView() {
           </button>
 
           {/* Red Box: 'Projects' title like report page and below that organization name */}
-          <div className="flex-1 min-w-0 flex flex-col justify-center">
+          <div className="flex-1 min-w-0 flex flex-col justify-center h-[46px]">
             <h1 className="font-extrabold text-base sm:text-lg leading-tight truncate text-white drop-shadow-xs">
               Projects
             </h1>

@@ -1011,13 +1011,13 @@ export default function ProjectDetail() {
         className="sitepunch-header text-white shadow-lg flex-shrink-0 relative z-40"
         style={{
           background: 'var(--brand-header, #7e0b1d)',
-          paddingTop: 'calc(12px + env(safe-area-inset-top, 0px))',
-          paddingBottom: '12px',
+          paddingTop: 'calc(14px + env(safe-area-inset-top, 0px))',
+          paddingBottom: '14px',
           paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center gap-2 min-h-[44px] max-w-4xl mx-auto w-full">
+        <div className="flex items-center gap-2 h-[46px] min-h-[46px] max-w-4xl mx-auto w-full">
           <button
             onClick={activePhase ? () => { setCurrentPhase(null); setSearchQuery('') } : overviewTab !== 'sitevisits' ? () => setOverviewTab('sitevisits') : navigateToProjects}
             className="liquid-glass-btn min-w-[40px] min-h-[40px] p-2 -ml-1 rounded-xl text-white transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
@@ -1025,10 +1025,10 @@ export default function ProjectDetail() {
           >
             <ArrowLeft size={20} />
           </button>
-          <div className="flex-1 min-w-0 flex flex-col justify-center">
+          <div className="flex-1 min-w-0 flex flex-col justify-center h-[46px]">
             {activePhase ? (
               <h1
-                className="font-extrabold text-xs sm:text-sm md:text-base leading-[1.15] line-clamp-2 break-words text-white drop-shadow-xs"
+                className="font-extrabold text-base sm:text-lg leading-tight line-clamp-2 break-words text-white drop-shadow-xs"
                 title={activePhase.name}
               >
                 {activePhase.name}
