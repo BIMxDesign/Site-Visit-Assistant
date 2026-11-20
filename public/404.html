@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Site Visit Assistant</title>
+    <script>
+      // Single Page Application router & fallback for GitHub Pages and iPad/mobile browsers
+      (function() {
+        var l = window.location;
+        var pathname = l.pathname || '';
+        
+        // Split path segments
+        var segments = pathname.split('/').filter(Boolean);
+        
+        // If hosted in a repository subfolder (e.g. /Site-Visit-Assistant/ or /site-visit-assistant)
+        var repoName = segments.length > 0 ? segments[0] : '';
+        var isRepoPath = repoName.toLowerCase() === 'site-visit-assistant';
+        var canonicalRepoName = isRepoPath ? 'Site-Visit-Assistant' : repoName;
+        
+        var base = isRepoPath ? ('/' + canonicalRepoName + '/') : '/';
+        
+        // Sub-route beyond repository name
+        var routeSegments = isRepoPath ? segments.slice(1) : segments;
+        var subRoute = routeSegments.length > 0 ? ('/' + routeSegments.join('/')) : '';
+        
+        // Build destination URL
+        var destination = l.protocol + '//' + l.host + base;
+        if (subRoute) {
+          destination += '?p=' + encodeURIComponent(subRoute) + (l.search ? ('&' + l.search.slice(1)) : '') + l.hash;
+        } else {
+          destination += l.search + l.hash;
+        }
+        
+        l.replace(destination);
+      })();
+    </script>
+  </head>
+  <body style="background-color: #7e0b1d; color: #ffffff; font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0;">
+    <p>Loading Site Visit Assistant...</p>
+  </body>
+</html>
