@@ -7,10 +7,18 @@ import { applyThemeColor, DEFAULT_THEME_COLOR, applyPinColor, DEFAULT_PIN_COLOR 
 import { applyAppFont, DEFAULT_FONT_ID } from './utils/font'
 import { initStoragePersistence } from './utils/pwa'
 
-// Register PWA service worker immediately for offline caching
+// Register PWA service worker safely for offline caching (survives iPad / Safari private browsing)
 if (typeof window !== 'undefined') {
-  registerSW({ immediate: true })
-  initStoragePersistence()
+  try {
+    registerSW({ immediate: true })
+  } catch (swErr) {
+    console.warn('Service worker registration note:', swErr)
+  }
+  try {
+    initStoragePersistence()
+  } catch (pErr) {
+    console.warn('Storage persistence check note:', pErr)
+  }
 }
 
 // Apply persisted theme, pin color & font immediately before React mount
