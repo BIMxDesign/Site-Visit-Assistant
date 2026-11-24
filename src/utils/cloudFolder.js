@@ -146,16 +146,32 @@ export async function saveBackupToCloud(blob, filename) {
   // 2. Try native Save As File Picker (user selects OneDrive / Google Drive / any folder directly)
   if (isSaveFilePickerSupported()) {
     try {
+      const isZip = filename.endsWith('.zip')
+      const types = isZip
+        ? [
+            {
+              description: 'Site Visit Assistant Archive (.zip)',
+              accept: { 'application/zip': ['.zip'] },
+            },
+            {
+              description: 'JSON Backup File (.json)',
+              accept: { 'application/json': ['.json'] },
+            },
+          ]
+        : [
+            {
+              description: 'Site Visit Assistant Backup File (.json)',
+              accept: { 'application/json': ['.json'] },
+            },
+            {
+              description: 'ZIP Package Archive (.zip)',
+              accept: { 'application/zip': ['.zip'] },
+            },
+          ]
+
       const fileHandle = await window.showSaveFilePicker({
         suggestedName: filename,
-        types: [
-          {
-            description: 'Site Visit Assistant Backup File (.json)',
-            accept: {
-              'application/json': ['.json'],
-            },
-          },
-        ],
+        types,
       })
       const writable = await fileHandle.createWritable()
       await writable.write(blob)
@@ -203,13 +219,14 @@ export async function listBackupsInCloudFolder() {
   const backups = []
   try {
     for await (const entry of connected.handle.values()) {
-      if (entry.kind === 'file' && entry.name.endsWith('.json')) {
+      if (entry.kind === 'file' && (entry.name.endsWith('.json') || entry.name.endsWith('.zip'))) {
         const file = await entry.getFile()
         backups.push({
           name: entry.name,
           size: file.size,
           lastModified: file.lastModified,
           handle: entry,
+          isZip: entry.name.endsWith('.zip'),
         })
       }
     }

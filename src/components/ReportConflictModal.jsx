@@ -1,7 +1,7 @@
 import React from 'react'
 import {
   AlertTriangle, RefreshCw, Copy, X, Clock, Calendar, ShieldCheck,
-  Layers, CheckCircle2, ArrowRight, Sparkles
+  Layers, CheckCircle2, ArrowRight, Sparkles, GitMerge
 } from 'lucide-react'
 
 function formatTimestamp(ts) {
@@ -20,6 +20,7 @@ function formatTimestamp(ts) {
 
 export default function ReportConflictModal({
   conflictData,
+  onMerge,
   onOverwrite,
   onDuplicate,
   onClose,
@@ -149,6 +150,33 @@ export default function ReportConflictModal({
 
         {/* Action Buttons */}
         <div className="space-y-2.5 text-xs pt-1">
+          {/* Option: Merge & Compare Observations */}
+          {onMerge && (
+            <button
+              type="button"
+              onClick={onMerge}
+              disabled={loading}
+              className="w-full text-left p-3 rounded-xl border-2 border-emerald-300 bg-emerald-50/70 hover:bg-emerald-50 hover:border-emerald-400 transition-all flex items-start gap-3 group cursor-pointer shadow-2xs"
+            >
+              <div className="p-2 bg-emerald-600 text-white rounded-lg group-hover:scale-105 transition-transform flex-shrink-0">
+                <GitMerge size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="font-bold text-emerald-950 text-xs">
+                    Merge &amp; Compare Observations
+                  </p>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-200 text-emerald-800">
+                    Recommended • Zero Data Loss
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-900 mt-0.5">
+                  Compare duplicate key pins and observations side-by-side to choose which version to keep or keep both.
+                </p>
+              </div>
+            </button>
+          )}
+
           {/* Overwrite */}
           <button
             type="button"

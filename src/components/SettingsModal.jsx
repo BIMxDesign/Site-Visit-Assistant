@@ -28,6 +28,7 @@ import {
   executePeriodicAutoBackup,
   requestCloudFolderPermission,
 } from '../utils/cloudFolder'
+import { isZipFile, extractZipBackup } from '../utils/zipArchive'
 import { useAppStore } from '../store/useAppStore'
 import {
   db, getSetting, setSetting, getAllProjects, deleteProject,
@@ -35,12 +36,14 @@ import {
   getSafetyBackup, restoreSafetyBackup, exportProjectData, getPhases, getPunchItems, updateUserProfile,
   getExportLogs, getAllExportLogSummaries, getAllExportLogsFlat,
   importReportData,
+  analyzeProjectMergeConflicts, executeCustomProjectMerge,
 } from '../db/database'
 import { Field, INPUT, Spinner } from './NewProjectModal'
 import EditProjectModal from './EditProjectModal'
 import LicenseActivationModal from './LicenseActivationModal'
 import DeleteProjectModal from './DeleteProjectModal'
 import ReportConflictModal from './ReportConflictModal'
+import ObservationConflictModal from './ObservationConflictModal'
 import {
   getLicensedProjectUuids,
   getCachedLicenses,
@@ -119,6 +122,8 @@ export default function SettingsModal() {
   const [importing,     setImporting]     = useState(false)
   const [importConflictData, setImportConflictData] = useState(null)
   const [reportConflictData, setReportConflictData] = useState(null)
+  const [observationConflictReport, setObservationConflictReport] = useState(null)
+  const [pendingMergeData, setPendingMergeData] = useState(null)
   const [copiedKeyUuid, setCopiedKeyUuid] = useState(null)
   const [showImportNotes, setShowImportNotes] = useState(true)
   const { canInstall, isInstalled, isOffline, isElectron, isPersistent, storageInfo, installApp } = usePwa()
@@ -695,15 +700,20 @@ export default function SettingsModal() {
     }
   }
 
-  // Import project or full cloud archive from JSON file
+  // Import project or full cloud archive from ZIP package or JSON file
   async function handleImportProject(e) {
     const file = e.target.files[0]
     if (!file) return
     e.target.value = ''
     setImporting(true)
     try {
-      const text = await file.text()
-      const data = JSON.parse(text)
+      let data
+      if (await isZipFile(file)) {
+        data = await extractZipBackup(file)
+      } else {
+        const text = await file.text()
+        data = JSON.parse(text)
+      }
 
       // Handle Full Multi-Project Cloud Backup Package
       if (data.projects && Array.isArray(data.projects) && data.projects.length > 0) {
@@ -807,6 +817,61 @@ export default function SettingsModal() {
     }
   }
 
+  // Initiate merge with observation conflict inspection
+  async function handleInitiateMerge(targetUuid, data) {
+    setImporting(true)
+    try {
+      const conflictAnalysis = await analyzeProjectMergeConflicts(targetUuid, data)
+      if (conflictAnalysis.conflictingItems && conflictAnalysis.conflictingItems.length > 0) {
+        setPendingMergeData({ targetUuid, fileData: data })
+        setObservationConflictReport(conflictAnalysis)
+        setImportConflictData(null)
+      } else {
+        // No conflicting observations, proceed directly with merge
+        await executeMerge(targetUuid, data)
+      }
+    } catch (err) {
+      console.error('Failed to analyze merge conflicts:', err)
+      await executeMerge(targetUuid, data)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Apply user's granular decisions from ObservationConflictModal
+  async function handleApplyObservationDecisions(decisions) {
+    if (!pendingMergeData) return
+    setImporting(true)
+    try {
+      const stats = await executeCustomProjectMerge(
+        pendingMergeData.targetUuid,
+        pendingMergeData.fileData,
+        decisions
+      )
+      await loadProjects()
+      reloadLicenses()
+      setObservationConflictReport(null)
+      setPendingMergeData(null)
+      alert(
+        `Project Successfully Merged (Zero Data Loss)!\n\n` +
+        `• Target: "${stats.targetProjectName}"\n` +
+        `• Reports: ${stats.reportsMatched} matched, ${stats.reportsAdded} new added\n` +
+        `• Key Plans: ${stats.keyPlansMatched} matched, ${stats.keyPlansAdded} new added\n` +
+        `• Observations Kept on Device: ${stats.itemsKeptDevice || 0}\n` +
+        `• Observations Updated with Incoming: ${stats.itemsUpdated || 0}\n` +
+        ((stats.itemsDuplicated || 0) > 0 ? `• Observations Kept Both (Duplicated): ${stats.itemsDuplicated}\n` : '') +
+        `• New Observations Added: ${stats.itemsAdded || 0}\n` +
+        `• Photos Merged: ${stats.photosAdded || 0}\n` +
+        (stats.licensePreserved ? `• Active License Preserved` : '')
+      )
+    } catch (err) {
+      console.error('Custom merge execution failed:', err)
+      alert(`Merge failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   // Execute intelligent non-destructive merge (Zero Data Loss)
   async function executeMerge(targetUuid, data) {
     setImporting(true)
@@ -851,6 +916,47 @@ export default function SettingsModal() {
     } catch (err) {
       console.error('Overwrite failed:', err)
       alert(`Overwrite failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Handle resolving individual report conflict: Merge & Compare Observations
+  const handleResolveReportConflictMerge = async () => {
+    if (!reportConflictData) return
+    setImporting(true)
+    try {
+      const pkg = reportConflictData.reportPackage
+      const targetUuid = reportConflictData.existingProject.uuid
+      const projectPayload = {
+        project: reportConflictData.existingProject,
+        phases: [pkg.phase],
+        floorPlans: pkg.floorPlans || [],
+        items: pkg.items || [],
+        photos: pkg.photos || [],
+        licenses: pkg.licenses || []
+      }
+      const conflictAnalysis = await analyzeProjectMergeConflicts(targetUuid, projectPayload)
+      if (conflictAnalysis.conflictingItems && conflictAnalysis.conflictingItems.length > 0) {
+        setPendingMergeData({ targetUuid, fileData: projectPayload })
+        setObservationConflictReport(conflictAnalysis)
+        setReportConflictData(null)
+      } else {
+        const stats = await executeCustomProjectMerge(targetUuid, projectPayload, {})
+        await loadProjects()
+        reloadLicenses()
+        setReportConflictData(null)
+        alert(
+          `Site Visit Report "${pkg.phase?.name}" merged successfully!\n\n` +
+          `• Target: "${stats.targetProjectName}"\n` +
+          `• Key Plans Added: ${stats.keyPlansAdded}\n` +
+          `• Observations Added: ${stats.itemsAdded}\n` +
+          `• Photos Merged: ${stats.photosAdded}`
+        )
+      }
+    } catch (err) {
+      console.error('Report merge failed:', err)
+      alert(`Report merge failed: ${err.message || 'Unknown error'}`)
     } finally {
       setImporting(false)
     }
@@ -1514,7 +1620,7 @@ export default function SettingsModal() {
                     <span>Restore from Cloud</span>
                     <input
                       type="file"
-                      accept=".json"
+                      accept=".zip,.sitevisit,.punch,.json,application/json,application/zip"
                       className="hidden"
                       disabled={importing}
                       onChange={handleImportProject}
@@ -1524,29 +1630,35 @@ export default function SettingsModal() {
               </div>
 
               {/* Direct OneDrive / Google Drive Folder Connection */}
-              {isFileSystemAccessSupported() && (
+              {isFileSystemAccessSupported() ? (
                 cloudFolder ? (
-                  <div className="bg-white/90 backdrop-blur-xs border border-emerald-300 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap shadow-2xs">
-                    <div className="flex items-center gap-2 text-xs text-emerald-950 font-semibold min-w-0">
-                      <FolderOpen size={16} className="text-emerald-600 flex-shrink-0" />
-                      <span className="truncate">Connected Cloud Folder: <strong className="font-bold underline text-emerald-800">{cloudFolder.name}</strong></span>
-                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold flex-shrink-0">Direct Sync Active</span>
+                  <div className="bg-white/90 backdrop-blur-xs border border-emerald-300 rounded-xl p-3 flex flex-col gap-2 shadow-2xs">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 text-xs text-emerald-950 font-semibold min-w-0">
+                        <FolderOpen size={16} className="text-emerald-600 flex-shrink-0" />
+                        <span className="truncate">Connected Cloud Folder: <strong className="font-bold underline text-emerald-800">{cloudFolder.name}</strong></span>
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold flex-shrink-0">Direct Sync Active</span>
+                      </div>
+                      <div className="flex items-center gap-2.5 text-xs">
+                        <button
+                          type="button"
+                          onClick={handleConnectCloudFolder}
+                          className="text-emerald-800 hover:text-emerald-950 font-semibold underline cursor-pointer"
+                        >
+                          Change
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDisconnectCloudFolder}
+                          className="text-red-600 hover:text-red-800 font-semibold underline cursor-pointer"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2.5 text-xs">
-                      <button
-                        type="button"
-                        onClick={handleConnectCloudFolder}
-                        className="text-emerald-800 hover:text-emerald-950 font-semibold underline cursor-pointer"
-                      >
-                        Change
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDisconnectCloudFolder}
-                        className="text-red-600 hover:text-red-800 font-semibold underline cursor-pointer"
-                      >
-                        Disconnect
-                      </button>
+                    <div className="pt-2 border-t border-emerald-200/80 flex items-center justify-between gap-2 flex-wrap text-[11px] text-emerald-900 font-medium">
+                      <span>📁 Format: <strong>Separated Photos &amp; Database (.zip package / folder)</strong></span>
+                      <span className="text-emerald-700 font-semibold">🔒 Photos kept outside personal photo gallery</span>
                     </div>
                   </div>
                 ) : (
@@ -1555,7 +1667,7 @@ export default function SettingsModal() {
                       <Folder size={16} className="text-blue-600 flex-shrink-0" />
                       <div>
                         <p className="font-bold text-gray-900 leading-tight">Connect OneDrive or Google Drive Folder</p>
-                        <p className="text-[11px] text-gray-500 mt-0.5">Select your OneDrive or Google Drive folder once; backups will write directly into it.</p>
+                        <p className="text-[11px] text-gray-500 mt-0.5">Select your OneDrive or Google Drive folder once; backups will write directly into it with separated photos and database.</p>
                       </div>
                     </div>
                     <button
@@ -1569,6 +1681,16 @@ export default function SettingsModal() {
                     </button>
                   </div>
                 )
+              ) : (
+                <div className="bg-white/80 backdrop-blur-xs border border-blue-200 rounded-xl p-3 flex items-center gap-2.5 text-xs text-gray-700 shadow-2xs">
+                  <Folder size={16} className="text-blue-600 flex-shrink-0" />
+                  <div>
+                    <p className="font-bold text-gray-900 leading-tight">OneDrive, iCloud &amp; Google Drive Export</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      On mobile, tap <strong>Export</strong> to save your project's ZIP archive and photos directly into your OneDrive or iCloud Drive folder via the Files app.
+                    </p>
+                  </div>
+                </div>
               )}
 
               {/* Automatic Periodic Backup (Daily / Weekly / Monthly) */}
@@ -1771,7 +1893,7 @@ export default function SettingsModal() {
                   <span>Import Project</span>
                   <input
                     type="file"
-                    accept=".json"
+                    accept=".zip,.sitevisit,.punch,.json,application/json,application/zip"
                     className="hidden"
                     disabled={importing}
                     onChange={handleImportProject}
@@ -2734,7 +2856,7 @@ export default function SettingsModal() {
               {/* Option 1: Merge Data (Recommended - Zero Data Loss) */}
               <button
                 type="button"
-                onClick={() => executeMerge(importConflictData.existingProject.uuid, importConflictData.fileData)}
+                onClick={() => handleInitiateMerge(importConflictData.existingProject.uuid, importConflictData.fileData)}
                 disabled={importing}
                 className="w-full text-left p-3.5 rounded-xl border-2 border-emerald-300 bg-emerald-50/70 hover:bg-emerald-50 hover:border-emerald-400 transition-all flex items-start gap-3 group cursor-pointer shadow-xs"
               >
@@ -2808,9 +2930,23 @@ export default function SettingsModal() {
       {reportConflictData && (
         <ReportConflictModal
           conflictData={reportConflictData}
+          onMerge={handleResolveReportConflictMerge}
           onOverwrite={handleResolveReportConflictOverwrite}
           onDuplicate={handleResolveReportConflictDuplicate}
           onClose={() => setReportConflictData(null)}
+          loading={importing}
+        />
+      )}
+
+      {/* Observation Pin Comparison & Conflict Modal */}
+      {observationConflictReport && (
+        <ObservationConflictModal
+          conflictReport={observationConflictReport}
+          onApplyDecisions={handleApplyObservationDecisions}
+          onCancel={() => {
+            setObservationConflictReport(null)
+            setPendingMergeData(null)
+          }}
           loading={importing}
         />
       )}

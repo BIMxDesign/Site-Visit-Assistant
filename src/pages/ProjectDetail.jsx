@@ -17,7 +17,9 @@ import {
   getPunchItems, deletePunchItem, resequenceReportPins, savePunchItem, getNextItemNumber,
   ensureProjectPhases, deletePhase, savePhase,
   getPhotos, savePhoto,
-  exportReportData, downloadReportBackup, importReportData
+  exportReportData, downloadReportBackup, importReportData,
+  isZipFile, extractZipBackup,
+  analyzeProjectMergeConflicts, executeCustomProjectMerge
 } from '../db/database'
 import FloorPlanThumbnail from '../components/FloorPlanThumbnail'
 import FloorPlanManagerModal from '../components/FloorPlanManagerModal'
@@ -25,6 +27,7 @@ import RenameFloorPlanModal from '../components/RenameFloorPlanModal'
 import EditProjectModal from '../components/EditProjectModal'
 import PhaseModal from '../components/PhaseModal'
 import ReportConflictModal from '../components/ReportConflictModal'
+import ObservationConflictModal from '../components/ObservationConflictModal'
 import Breadcrumbs from '../components/Breadcrumbs'
 import ObservationStatusSelect from '../components/ObservationStatusSelect'
 import { formatVisitDateTime, formatAttendeesTruncated, formatAttendeesSummary, truncateObservationTitle, formatDatePattern, normalizeObservationStatus, isObservationOpenStatus, stripHtmlToPlainText } from '../utils/formatters'
@@ -892,6 +895,8 @@ export default function ProjectDetail() {
   }
 
   const [reportConflictData, setReportConflictData] = useState(null)
+  const [observationConflictReport, setObservationConflictReport] = useState(null)
+  const [pendingMergeData, setPendingMergeData] = useState(null)
   const [importingReport, setImportingReport] = useState(false)
   const [exportingReportUuid, setExportingReportUuid] = useState(null)
   const reportFileInputRef = useRef(null)
@@ -915,11 +920,16 @@ export default function ProjectDetail() {
     e.target.value = ''
     setImportingReport(true)
     try {
-      const text = await file.text()
-      const data = JSON.parse(text)
+      let data
+      if (await isZipFile(file)) {
+        data = await extractZipBackup(file)
+      } else {
+        const text = await file.text()
+        data = JSON.parse(text)
+      }
 
       if (!data || (!data.phase && !data.project)) {
-        alert('Invalid report backup file. Please select a valid Site Visit Report (.json) file.')
+        alert('Invalid report backup file. Please select a valid Site Visit Report (.zip or .json) file.')
         setImportingReport(false)
         return
       }
@@ -989,6 +999,72 @@ export default function ProjectDetail() {
       )
     } catch (err) {
       alert(`Duplicate import failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImportingReport(false)
+    }
+  }
+
+  const handleResolveConflictMerge = async () => {
+    if (!reportConflictData) return
+    setImportingReport(true)
+    try {
+      const pkg = reportConflictData.reportPackage
+      const projectPayload = {
+        project: reportConflictData.existingProject || project,
+        phases: [pkg.phase],
+        floorPlans: pkg.floorPlans || [],
+        items: pkg.items || [],
+        photos: pkg.photos || [],
+        licenses: pkg.licenses || []
+      }
+
+      const conflictAnalysis = await analyzeProjectMergeConflicts(currentProjectUuid, projectPayload)
+      if (conflictAnalysis.conflictingItems && conflictAnalysis.conflictingItems.length > 0) {
+        setPendingMergeData({ targetUuid: currentProjectUuid, fileData: projectPayload })
+        setObservationConflictReport(conflictAnalysis)
+        setReportConflictData(null)
+      } else {
+        const stats = await executeCustomProjectMerge(currentProjectUuid, projectPayload, {})
+        await load()
+        setReportConflictData(null)
+        alert(
+          `Site Visit Report "${pkg.phase?.name}" merged successfully!\n\n` +
+          `• Key Plans Added: ${stats.keyPlansAdded}\n` +
+          `• Observations Added: ${stats.itemsAdded}\n` +
+          `• Photos Merged: ${stats.photosAdded}`
+        )
+      }
+    } catch (err) {
+      console.error('Report merge failed:', err)
+      alert(`Report merge failed: ${err.message || 'Unknown error'}`)
+    } finally {
+      setImportingReport(false)
+    }
+  }
+
+  const handleApplyObservationDecisions = async (decisions) => {
+    if (!pendingMergeData) return
+    setImportingReport(true)
+    try {
+      const stats = await executeCustomProjectMerge(
+        pendingMergeData.targetUuid,
+        pendingMergeData.fileData,
+        decisions
+      )
+      await load()
+      setObservationConflictReport(null)
+      setPendingMergeData(null)
+      alert(
+        `Report Successfully Merged (Zero Data Loss)!\n\n` +
+        `• Observations Kept on Device: ${stats.itemsKeptDevice || 0}\n` +
+        `• Observations Updated with Incoming: ${stats.itemsUpdated || 0}\n` +
+        ((stats.itemsDuplicated || 0) > 0 ? `• Observations Kept Both (Duplicated): ${stats.itemsDuplicated}\n` : '') +
+        `• New Observations Added: ${stats.itemsAdded || 0}\n` +
+        `• Photos Merged: ${stats.photosAdded || 0}`
+      )
+    } catch (err) {
+      console.error('Custom merge failed:', err)
+      alert(`Merge failed: ${err.message || 'Unknown error'}`)
     } finally {
       setImportingReport(false)
     }
@@ -1621,7 +1697,7 @@ export default function ProjectDetail() {
                   )}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
+                <div className="grid grid-cols-1 gap-3 sm:gap-4 w-full">
                   {filteredPhases.map(phase => {
                     const formattedDate = phase.visitDate ? formatDatePattern(phase.visitDate) : ''
                     const phaseFps = floorPlans.filter(fp => fp.phaseUuid === phase.uuid || (!fp.phaseUuid && phase === phases[0]))
@@ -1632,7 +1708,7 @@ export default function ProjectDetail() {
                       <div
                         key={phase.uuid}
                         onClick={() => setCurrentPhase(phase.uuid)}
-                        className="rounded-2xl p-3.5 sm:p-4.5 cursor-pointer active:scale-[0.99] transition-all duration-200 group relative border border-l-4 hover:-translate-y-0.5 overflow-hidden"
+                        className="rounded-2xl p-3.5 sm:p-4.5 cursor-pointer active:scale-[0.99] transition-all duration-200 group relative border border-l-4 hover:-translate-y-0.5 overflow-hidden w-full"
                         style={{
                           borderLeftColor: '#7e22ce',
                           borderColor: 'rgba(216, 180, 254, 0.55)',
@@ -1651,23 +1727,10 @@ export default function ProjectDetail() {
                               </h3>
                             </div>
 
-                            {(formattedDate || phase.weather) && (
-                              <div className="flex items-center gap-2 mt-1.5 flex-wrap text-xs text-gray-500">
-                                {formattedDate && (
-                                  <span className="flex items-center gap-1.5 flex-shrink-0">
-                                    <Calendar size={13} className="text-gray-400 flex-shrink-0" />
-                                    <span>{formattedDate}</span>
-                                  </span>
-                                )}
-                                {formattedDate && phase.weather && (
-                                  <span>•</span>
-                                )}
-                                {phase.weather && (
-                                  <span className="flex items-center gap-1.5 text-gray-600 flex-shrink-0">
-                                    <CloudSun size={14} className="text-gray-400 flex-shrink-0" />
-                                    <span>{phase.weather}</span>
-                                  </span>
-                                )}
+                            {formattedDate && (
+                              <div className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-500">
+                                <Calendar size={13} className="text-gray-400 flex-shrink-0" />
+                                <span>{formattedDate}</span>
                               </div>
                             )}
 
@@ -1683,20 +1746,23 @@ export default function ProjectDetail() {
                               </div>
                             )}
                           </div>
+                        </div>
+
+                        {/* Bottom Row: Key Plans & Observations counter on left, Action buttons on right */}
+                        <div className="flex items-center justify-between gap-3 mt-3 pt-2 border-t border-purple-100/60 min-w-0">
+                          <div className="inline-flex items-center gap-2 sm:gap-3 px-2.5 sm:px-3 py-1 rounded-xl bg-white/70 backdrop-blur-md border border-white/80 shadow-2xs text-xs flex-shrink-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-gray-900">{phaseFps.length}</span>
+                              <span className="text-[11px] text-gray-500 font-medium">Key Plans</span>
+                            </div>
+                            <div className="w-px h-3.5 bg-gray-200/80" />
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-gray-900">{phaseItems.length}</span>
+                              <span className="text-[11px] text-gray-500 font-medium">Observations</span>
+                            </div>
+                          </div>
 
                           <div className="flex items-center gap-1.5 flex-shrink-0">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleExportReport(phase)
-                              }}
-                              disabled={exportingReportUuid === phase.uuid}
-                              className="liquid-pill p-1.5 rounded-xl text-gray-500 hover:text-purple-700 flex items-center justify-center cursor-pointer transition-colors"
-                              aria-label="Export site visit backup"
-                              title="Export site visit backup (.json)"
-                            >
-                              <Download size={15} className={exportingReportUuid === phase.uuid ? 'animate-bounce' : ''} />
-                            </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1731,21 +1797,6 @@ export default function ProjectDetail() {
                               <Trash2 size={15} />
                             </button>
                             <ChevronRight size={18} className="text-gray-300 group-hover:text-purple-600 group-hover:translate-x-0.5 transition-all ml-1" />
-                          </div>
-                        </div>
-
-                        {/* Key Plans & Observations counter */}
-                        <div className="flex items-center gap-2 mt-3 pt-0.5 min-w-0">
-                          <div className="inline-flex items-center gap-2 sm:gap-3 px-2.5 sm:px-3 py-1 rounded-xl bg-white/70 backdrop-blur-md border border-white/80 shadow-2xs text-xs">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-gray-900">{phaseFps.length}</span>
-                              <span className="text-[11px] text-gray-500 font-medium">Key Plans</span>
-                            </div>
-                            <div className="w-px h-3.5 bg-gray-200/80" />
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-gray-900">{phaseItems.length}</span>
-                              <span className="text-[11px] text-gray-500 font-medium">Observations</span>
-                            </div>
                           </div>
                         </div>
                       </div>
@@ -2502,7 +2553,7 @@ export default function ProjectDetail() {
       <input
         ref={reportFileInputRef}
         type="file"
-        accept=".json,application/json"
+        accept=".zip,.sitevisit,.punch,.json,application/json,application/zip"
         onChange={handleImportReportFile}
         className="hidden"
       />
@@ -2511,9 +2562,23 @@ export default function ProjectDetail() {
       {reportConflictData && (
         <ReportConflictModal
           conflictData={reportConflictData}
+          onMerge={handleResolveConflictMerge}
           onOverwrite={handleResolveConflictOverwrite}
           onDuplicate={handleResolveConflictDuplicate}
           onClose={() => setReportConflictData(null)}
+          loading={importingReport}
+        />
+      )}
+
+      {/* Observation Pin Comparison & Conflict Modal */}
+      {observationConflictReport && (
+        <ObservationConflictModal
+          conflictReport={observationConflictReport}
+          onApplyDecisions={handleApplyObservationDecisions}
+          onCancel={() => {
+            setObservationConflictReport(null)
+            setPendingMergeData(null)
+          }}
           loading={importingReport}
         />
       )}

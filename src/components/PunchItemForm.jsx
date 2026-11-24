@@ -26,6 +26,7 @@ import {
 } from '../db/database'
 import { ModalOverlay, ModalHeader, Field, INPUT, Spinner } from './NewProjectModal'
 import PhotoAnnotator from './PhotoAnnotator'
+import InAppCameraModal from './InAppCameraModal'
 import { v4 as uuidv4 } from 'uuid'
 import { OBSERVATION_STATUSES, normalizeObservationStatus, stripHtmlToPlainText } from '../utils/formatters'
 import { preparePhotoForQuality, getStoredPhotoQuality, readFileAsDataUrl } from '../utils/media'
@@ -1006,6 +1007,8 @@ export default function PunchItemForm() {
     e.target.value = ''
   }
 
+  const [showInAppCamera, setShowInAppCamera] = useState(false)
+
   function handleCameraCapture() {
     if (photos.length >= MAX_PHOTOS) {
       alert(`Maximum ${MAX_PHOTOS} images can be uploaded to a punch list item.`)
@@ -1015,7 +1018,18 @@ export default function PunchItemForm() {
       recognitionRef.current.stop()
       setListening(false)
     }
-    fileInputRef.current?.click()
+    // Open in-app camera modal to keep photos outside of personal photo gallery
+    setShowInAppCamera(true)
+  }
+
+  async function handleInAppPhotoCaptured(capturedDataUrl) {
+    setShowInAppCamera(false)
+    if (item) {
+      await savePunchItem({ ...item, ...form })
+    }
+    const activeQuality = photoQuality || getStoredPhotoQuality()
+    const preparedDataUrl = await preparePhotoForQuality(capturedDataUrl, activeQuality)
+    setAnnotatingPhoto({ uuid: null, dataUrl: preparedDataUrl })
   }
 
   async function handleStartEditPhoto(photo) {
@@ -1350,7 +1364,6 @@ export default function PunchItemForm() {
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   className="hidden"
                   disabled={photos.length >= MAX_PHOTOS}
                   onChange={handlePhotoSelect}
@@ -2053,6 +2066,14 @@ export default function PunchItemForm() {
           onCancel={() => setAnnotatingPhoto(null)}
         />
       )}
+
+      {/* ── In-App Camera Viewfinder (Photos Kept Outside Phone Gallery) ── */}
+      <InAppCameraModal
+        isOpen={showInAppCamera}
+        onClose={() => setShowInAppCamera(false)}
+        onCapture={handleInAppPhotoCaptured}
+        onFallbackFilePick={() => fileInputRef.current?.click()}
+      />
     </>
   )
 }

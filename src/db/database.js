@@ -3,6 +3,15 @@ import { v4 as uuidv4 } from 'uuid'
 import { getProjectLicense, importAndPreserveLicenses } from '../services/licenseService'
 import { isObservationOpenStatus } from '../utils/formatters'
 import { saveBackupToCloud } from '../utils/cloudFolder'
+import {
+  createProjectZipPackage,
+  createReportZipPackage,
+  createAllProjectsZipPackage,
+  extractZipBackup,
+  isZipFile
+} from '../utils/zipArchive'
+
+export { extractZipBackup, isZipFile }
 
 export const db = new Dexie('PunchListDB')
 
@@ -861,15 +870,13 @@ export async function exportProjectData(projectUuid) {
 }
 
 /**
- * Export a full project (including license records and photos) directly to connected OneDrive / Google Drive folder,
- * native file picker, or fallback download.
+ * Export a full project with separated photos and clean metadata directly as a structured ZIP archive
+ * to connected OneDrive / Google Drive folder, native file picker, or fallback download.
  */
 export async function downloadProjectBackup(project) {
   if (!project?.uuid) throw new Error('Missing project identifier for backup export.')
   const data = await exportProjectData(project.uuid)
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const sanitized = (project.name || 'project').replace(/[^a-z0-9_-]/gi, '_')
-  const filename = `${sanitized}-backup-${new Date().toISOString().slice(0, 10)}.json`
+  const { blob, filename } = await createProjectZipPackage(data)
 
   const result = await saveBackupToCloud(blob, filename)
 
@@ -878,7 +885,7 @@ export async function downloadProjectBackup(project) {
     projectUuid: project.uuid,
     projectName: project.name || '',
     type: 'project',
-    reportName: 'Full Project Backup (.json)',
+    reportName: 'Project Backup Archive (.zip)',
     filename: filename,
     pageCount: null,
   }).catch(() => {})
@@ -922,7 +929,7 @@ export async function exportReportData(phaseUuid, projectUuid = null) {
   return {
     app: 'Site Visit Assistant',
     type: 'individual_report',
-    version: '1.0.0',
+    version: '2.0.0',
     exportedAt: Date.now(),
     project: {
       uuid: project.uuid,
@@ -946,16 +953,11 @@ export async function exportReportData(phaseUuid, projectUuid = null) {
 }
 
 /**
- * Downloads an individual site visit report backup (.json) directly or saves to cloud sync folder.
+ * Downloads an individual site visit report backup as a structured ZIP archive directly or saves to cloud sync folder.
  */
 export async function downloadReportBackup(phaseUuid, projectUuid = null) {
   const data = await exportReportData(phaseUuid, projectUuid)
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-
-  const projName = (data.project?.name || 'Project').replace(/[^a-z0-9_-]/gi, '_')
-  const reportName = (data.phase?.name || 'Report').replace(/[^a-z0-9_-]/gi, '_')
-  const dateStr = new Date().toISOString().slice(0, 10)
-  const filename = `${projName}-${reportName}-report-backup-${dateStr}.json`
+  const { blob, filename } = await createReportZipPackage(data)
 
   const result = await saveBackupToCloud(blob, filename)
 
@@ -964,8 +966,8 @@ export async function downloadReportBackup(phaseUuid, projectUuid = null) {
     await logExport({
       projectUuid: data.project?.uuid || '',
       projectName: data.project?.name || '',
-      type: 'report_json',
-      reportName: data.phase?.name || 'Report Backup',
+      type: 'report_zip',
+      reportName: data.phase?.name || 'Report Backup (.zip)',
       filename: filename,
       pageCount: null,
     })
@@ -975,7 +977,7 @@ export async function downloadReportBackup(phaseUuid, projectUuid = null) {
 }
 
 /**
- * Packages all projects, key plans, observations, photos, and licenses into a JSON blob.
+ * Packages all projects, key plans, observations, photos, and licenses into a structured ZIP archive.
  */
 export async function getAllProjectsBackupBlob(filenamePrefix = 'site-visit-assistant-ALL-PROJECTS-backup') {
   const allProjects = await getAllProjects()
@@ -983,32 +985,23 @@ export async function getAllProjectsBackupBlob(filenamePrefix = 'site-visit-assi
     throw new Error('No projects found to backup.')
   }
 
-  const backupPackage = {
-    app: 'Site Visit Assistant',
-    version: '1.0.0',
-    exportedAt: new Date().toISOString(),
-    totalProjects: allProjects.length,
-    projects: []
-  }
-
+  const projectPackages = []
   for (const proj of allProjects) {
     const pData = await exportProjectData(proj.uuid)
-    backupPackage.projects.push(pData)
+    projectPackages.push(pData)
   }
 
-  const blob = new Blob([JSON.stringify(backupPackage, null, 2)], { type: 'application/json' })
-  const filename = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.json`
+  const { blob, filename, count } = await createAllProjectsZipPackage(projectPackages)
 
   return {
     blob,
     filename,
-    count: allProjects.length,
-    backupPackage,
+    count,
   }
 }
 
 /**
- * Exports all projects, key plans, observations, photos, and licenses into a single archive
+ * Exports all projects, key plans, observations, photos, and licenses into a structured ZIP archive
  * directly to connected OneDrive / Google Drive folder, native file picker, or fallback download.
  */
 export async function downloadAllProjectsBackup() {
@@ -1656,6 +1649,406 @@ export async function mergeProjectData(targetProjectUuid, data) {
     await resequenceReportPins({ projectUuid: targetProjectUuid })
   } catch (reseqErr) {
     console.warn('Resequence pins during merge notice:', reseqErr)
+  }
+
+  const finalItems = await getPunchItems(targetProjectUuid)
+  const openCount = finalItems.filter(i => isObservationOpenStatus(i.status)).length
+  updatedProject.totalItems = finalItems.length
+  updatedProject.openItems = openCount
+
+  const finalPhases = await getPhases(targetProjectUuid)
+  updatedProject.reportCount = finalPhases.length
+
+  await saveProject(updatedProject)
+
+  return stats
+}
+
+/**
+ * Analyzes potential merge conflicts between an existing project on device and an incoming backup.
+ * Identifies duplicate/matching observation pins and extracts their details, notes, and photos
+ * for side-by-side user comparison.
+ */
+export async function analyzeProjectMergeConflicts(targetProjectUuid, data) {
+  if (!targetProjectUuid) throw new Error('Target project UUID is required for conflict analysis.')
+  if (!data || typeof data !== 'object') throw new Error('Invalid project data format.')
+
+  const targetProject = await getProject(targetProjectUuid)
+  if (!targetProject) throw new Error('Target project was not found on this device.')
+
+  const { project: incomingProject, phases = [], floorPlans = [], items = [], photos = [] } = data
+
+  const existingPhases = await getPhases(targetProjectUuid)
+  const existingFloorPlans = await getFloorPlans(targetProjectUuid)
+  const existingItems = await getPunchItems(targetProjectUuid)
+  const allExistingPhotos = await db.photos.toArray()
+
+  // Map Phases (Reports)
+  const phaseMap = {}
+  let matchingReportsCount = 0
+  for (const ph of phases) {
+    const match = existingPhases.find(
+      ep => ep.uuid === ph.uuid ||
+            (ep.name && ph.name && ep.name.trim().toLowerCase() === ph.name.trim().toLowerCase())
+    )
+    if (match) {
+      phaseMap[ph.uuid] = match.uuid
+      matchingReportsCount++
+    }
+  }
+
+  // Map Floor Plans (Key Plans)
+  const fpMap = {}
+  let matchingPlansCount = 0
+  for (const fp of floorPlans) {
+    const mappedPhaseUuid = phaseMap[fp.phaseUuid] || fp.phaseUuid || (existingPhases[0]?.uuid)
+    const match = existingFloorPlans.find(
+      efp => efp.uuid === fp.uuid ||
+             (efp.name && fp.name &&
+              efp.name.trim().toLowerCase() === fp.name.trim().toLowerCase() &&
+              efp.phaseUuid === mappedPhaseUuid)
+    )
+    if (match) {
+      fpMap[fp.uuid] = match.uuid
+      matchingPlansCount++
+    }
+  }
+
+  // Quick lookup maps for photos
+  const existingPhotosByItem = {}
+  for (const p of allExistingPhotos) {
+    if (!existingPhotosByItem[p.punchItemUuid]) existingPhotosByItem[p.punchItemUuid] = []
+    existingPhotosByItem[p.punchItemUuid].push(p)
+  }
+
+  const incomingPhotosByItem = {}
+  for (const p of photos) {
+    if (!incomingPhotosByItem[p.punchItemUuid]) incomingPhotosByItem[p.punchItemUuid] = []
+    incomingPhotosByItem[p.punchItemUuid].push(p)
+  }
+
+  const conflictingItems = []
+  let newItemsCount = 0
+
+  for (const item of items) {
+    const mappedFpUuid = fpMap[item.floorPlanUuid] || item.floorPlanUuid
+    const mappedPhaseUuid = phaseMap[item.phaseUuid] || item.phaseUuid || (existingPhases[0]?.uuid)
+
+    // Check if item already exists by UUID
+    let match = existingItems.find(ei => ei.uuid === item.uuid)
+
+    // If no UUID match, check matching location + description
+    if (!match && mappedFpUuid && item.x != null && item.y != null) {
+      match = existingItems.find(ei =>
+        ei.floorPlanUuid === mappedFpUuid &&
+        Math.abs((ei.x || 0) - item.x) < 0.01 &&
+        Math.abs((ei.y || 0) - item.y) < 0.01 &&
+        (ei.description || '').trim() === (item.description || '').trim()
+      )
+    }
+
+    // Also match by floorPlan and pin number
+    if (!match && mappedFpUuid && (item.itemNumber != null || item.number != null)) {
+      const pinNum = item.itemNumber ?? item.number
+      match = existingItems.find(ei =>
+        ei.floorPlanUuid === mappedFpUuid &&
+        (ei.itemNumber === pinNum || ei.number === pinNum)
+      )
+    }
+
+    if (match) {
+      const existingPlan = existingFloorPlans.find(f => f.uuid === match.floorPlanUuid)
+      const existingPhase = existingPhases.find(p => p.uuid === (match.phaseUuid || existingPlan?.phaseUuid))
+      const incomingPlan = floorPlans.find(f => f.uuid === item.floorPlanUuid)
+      const incomingPhase = phases.find(p => p.uuid === (item.phaseUuid || incomingPlan?.phaseUuid))
+
+      const existingPhotosForItem = existingPhotosByItem[match.uuid] || []
+      const incomingPhotosForItem = incomingPhotosByItem[item.uuid] || []
+
+      const existingTs = match.updatedAt || match.createdAt || 0
+      const incomingTs = item.updatedAt || item.createdAt || 0
+      const isIncomingNewer = incomingTs > existingTs
+
+      const conflictId = item.uuid || match.uuid || `conflict_${conflictingItems.length + 1}`
+
+      conflictingItems.push({
+        id: conflictId,
+        incomingUuid: item.uuid,
+        existingUuid: match.uuid,
+        existingId: match.id,
+        pinNumber: match.itemNumber || match.number || item.itemNumber || item.number || (conflictingItems.length + 1),
+        planName: existingPlan?.name || incomingPlan?.name || 'Key Plan',
+        phaseName: existingPhase?.name || incomingPhase?.name || 'Site Visit Report',
+        isIncomingNewer,
+        existing: match,
+        incoming: item,
+        existingPhotos: existingPhotosForItem,
+        incomingPhotos: incomingPhotosForItem,
+        mappedFpUuid,
+        mappedPhaseUuid
+      })
+    } else {
+      newItemsCount++
+    }
+  }
+
+  return {
+    targetProject,
+    incomingProject,
+    conflictingItems,
+    newItemsCount,
+    matchingReportsCount,
+    matchingPlansCount
+  }
+}
+
+/**
+ * Executes a custom project merge using specific user decisions for each conflicting observation.
+ * Decisions per conflict id:
+ * - 'existing': Keep the observation currently on this device. Non-duplicate incoming photos can be attached.
+ * - 'incoming': Overwrite the local observation's description/status/priority/trade with incoming data.
+ * - 'both': Keep local observation untouched, and add the incoming observation as a new unique pin.
+ */
+export async function executeCustomProjectMerge(targetProjectUuid, data, decisions = {}) {
+  if (!targetProjectUuid) throw new Error('Target project UUID is required.')
+  if (!data || typeof data !== 'object') throw new Error('Invalid project data format.')
+
+  const targetProject = await getProject(targetProjectUuid)
+  if (!targetProject) throw new Error('Target project was not found on this device.')
+
+  let { project: incomingProject, phases = [], floorPlans = [], items = [], photos = [], licenses = [] } = data
+
+  // Safety snapshot
+  try {
+    const safetyBackup = await exportProjectData(targetProjectUuid)
+    await setSetting(`safety_backup_${targetProjectUuid}`, {
+      timestamp: Date.now(),
+      projectName: targetProject.name,
+      data: safetyBackup
+    })
+  } catch (backupErr) {
+    console.warn('Pre-merge safety snapshot notice:', backupErr)
+  }
+
+  const stats = {
+    targetProjectName: targetProject.name,
+    reportsAdded: 0,
+    reportsMatched: 0,
+    keyPlansAdded: 0,
+    keyPlansMatched: 0,
+    itemsKeptDevice: 0,
+    itemsUpdated: 0,
+    itemsDuplicated: 0,
+    itemsAdded: 0,
+    photosAdded: 0,
+    licensePreserved: false
+  }
+
+  // 1. Merge project metadata
+  const updatedProject = {
+    ...targetProject,
+    address: targetProject.address || incomingProject.address || '',
+    client: targetProject.client || incomingProject.client || '',
+    architect: targetProject.architect || incomingProject.architect || '',
+    number: targetProject.number || incomingProject.number || '',
+    updatedAt: Date.now()
+  }
+
+  // 2. Fetch all existing entities
+  const existingPhases = await getPhases(targetProjectUuid)
+  const existingFloorPlans = await getFloorPlans(targetProjectUuid)
+  const existingItems = await getPunchItems(targetProjectUuid)
+  const existingPhotos = await db.photos.toArray()
+
+  // 3. Map Phases
+  const phaseMap = {}
+  for (const ph of phases) {
+    const match = existingPhases.find(
+      ep => ep.uuid === ph.uuid ||
+            (ep.name && ph.name && ep.name.trim().toLowerCase() === ph.name.trim().toLowerCase())
+    )
+    if (match) {
+      phaseMap[ph.uuid] = match.uuid
+      stats.reportsMatched++
+    } else {
+      const newPhaseUuid = uuidv4()
+      phaseMap[ph.uuid] = newPhaseUuid
+      const { id: _id, ...cleanPh } = ph
+      const newPhase = {
+        ...cleanPh,
+        uuid: newPhaseUuid,
+        projectUuid: targetProjectUuid,
+        order: existingPhases.length + stats.reportsAdded + 1,
+        createdAt: ph.createdAt || Date.now(),
+        updatedAt: Date.now()
+      }
+      await savePhase(newPhase)
+      existingPhases.push(newPhase)
+      stats.reportsAdded++
+    }
+  }
+
+  // 4. Map Key Plans
+  const fpMap = {}
+  for (const fp of floorPlans) {
+    const mappedPhaseUuid = phaseMap[fp.phaseUuid] || fp.phaseUuid || (existingPhases[0]?.uuid)
+    const match = existingFloorPlans.find(
+      efp => efp.uuid === fp.uuid ||
+             (efp.name && fp.name &&
+              efp.name.trim().toLowerCase() === fp.name.trim().toLowerCase() &&
+              efp.phaseUuid === mappedPhaseUuid)
+    )
+
+    if (match) {
+      fpMap[fp.uuid] = match.uuid
+      stats.keyPlansMatched++
+    } else {
+      const newFpUuid = uuidv4()
+      fpMap[fp.uuid] = newFpUuid
+      const { id: _id, ...cleanFp } = fp
+      const newFp = {
+        ...cleanFp,
+        uuid: newFpUuid,
+        projectUuid: targetProjectUuid,
+        phaseUuid: mappedPhaseUuid,
+        createdAt: fp.createdAt || Date.now(),
+        updatedAt: Date.now()
+      }
+      await saveFloorPlan(newFp)
+      existingFloorPlans.push(newFp)
+      stats.keyPlansAdded++
+    }
+  }
+
+  // 5. Items with decisions
+  const itemMap = {} // maps incoming item.uuid -> destination punchItemUuid
+
+  for (const item of items) {
+    const mappedFpUuid = fpMap[item.floorPlanUuid] || item.floorPlanUuid
+    const mappedPhaseUuid = phaseMap[item.phaseUuid] || item.phaseUuid || (existingPhases[0]?.uuid)
+
+    // Check match
+    let match = existingItems.find(ei => ei.uuid === item.uuid)
+    if (!match && mappedFpUuid && item.x != null && item.y != null) {
+      match = existingItems.find(ei =>
+        ei.floorPlanUuid === mappedFpUuid &&
+        Math.abs((ei.x || 0) - item.x) < 0.01 &&
+        Math.abs((ei.y || 0) - item.y) < 0.01 &&
+        (ei.description || '').trim() === (item.description || '').trim()
+      )
+    }
+    if (!match && mappedFpUuid && (item.itemNumber != null || item.number != null)) {
+      const pinNum = item.itemNumber ?? item.number
+      match = existingItems.find(ei =>
+        ei.floorPlanUuid === mappedFpUuid &&
+        (ei.itemNumber === pinNum || ei.number === pinNum)
+      )
+    }
+
+    if (match) {
+      const conflictId = item.uuid || match.uuid
+      const userChoice = decisions[conflictId] || (item.updatedAt > match.updatedAt ? 'incoming' : 'existing')
+
+      if (userChoice === 'existing') {
+        // Keep existing item as is
+        itemMap[item.uuid] = match.uuid
+        stats.itemsKeptDevice++
+      } else if (userChoice === 'incoming') {
+        // Update existing item with incoming data
+        itemMap[item.uuid] = match.uuid
+        await db.punchItems.update(match.id, {
+          description: item.description !== undefined ? item.description : match.description,
+          status: item.status || match.status,
+          priority: item.priority || match.priority,
+          category: item.category || match.category,
+          trade: item.trade || match.trade,
+          dueDate: item.dueDate || match.dueDate,
+          updatedAt: Date.now()
+        })
+        stats.itemsUpdated++
+      } else if (userChoice === 'both') {
+        // Keep both: Keep existing item untouched, and create a brand new duplicate item for incoming
+        const duplicateItemUuid = uuidv4()
+        itemMap[item.uuid] = duplicateItemUuid
+        const { id: _id, ...cleanItem } = item
+        const duplicateItem = {
+          ...cleanItem,
+          uuid: duplicateItemUuid,
+          projectUuid: targetProjectUuid,
+          floorPlanUuid: mappedFpUuid,
+          phaseUuid: mappedPhaseUuid,
+          createdAt: item.createdAt || Date.now(),
+          updatedAt: Date.now()
+        }
+        await savePunchItem(duplicateItem)
+        existingItems.push(duplicateItem)
+        stats.itemsDuplicated++
+        stats.itemsAdded++
+      }
+    } else {
+      // Brand new item: create it
+      const newItemUuid = uuidv4()
+      itemMap[item.uuid] = newItemUuid
+      const { id: _id, ...cleanItem } = item
+      const newItem = {
+        ...cleanItem,
+        uuid: newItemUuid,
+        projectUuid: targetProjectUuid,
+        floorPlanUuid: mappedFpUuid,
+        phaseUuid: mappedPhaseUuid,
+        createdAt: item.createdAt || Date.now(),
+        updatedAt: Date.now()
+      }
+      await savePunchItem(newItem)
+      existingItems.push(newItem)
+      stats.itemsAdded++
+    }
+  }
+
+  // 6. Merge Photos
+  const targetItemUuids = new Set(existingItems.map(i => i.uuid))
+  for (const photo of photos) {
+    const mappedItemUuid = itemMap[photo.punchItemUuid] || photo.punchItemUuid
+    if (!targetItemUuids.has(mappedItemUuid)) continue
+
+    const photoExists = existingPhotos.some(
+      ep => ep.punchItemUuid === mappedItemUuid &&
+            (ep.uuid === photo.uuid ||
+             ((ep.imageData || ep.dataUrl) && (photo.imageData || photo.dataUrl) &&
+              (ep.imageData || ep.dataUrl).slice(0, 300) === (photo.imageData || photo.dataUrl).slice(0, 300)))
+    )
+
+    if (!photoExists) {
+      const { id: _id, ...cleanPhoto } = photo
+      const newPhoto = {
+        ...cleanPhoto,
+        uuid: uuidv4(),
+        punchItemUuid: mappedItemUuid,
+        createdAt: photo.createdAt || Date.now()
+      }
+      await savePhoto(newPhoto)
+      existingPhotos.push(newPhoto)
+      stats.photosAdded++
+    }
+  }
+
+  // 7. Retain & preserve licenses
+  if (incomingProject.isLicensed || (licenses && licenses.length > 0) || targetProject.isLicensed) {
+    const remappedLicenses = (licenses || []).map(lic => ({
+      ...lic,
+      projectUuid: targetProjectUuid,
+      reportUuid: phaseMap[lic.reportUuid] || lic.reportUuid
+    }))
+    await importAndPreserveLicenses(remappedLicenses, updatedProject)
+    updatedProject.isLicensed = true
+    stats.licensePreserved = true
+  }
+
+  // Resequence pins and update project counts
+  try {
+    await resequenceReportPins({ projectUuid: targetProjectUuid })
+  } catch (reseqErr) {
+    console.warn('Resequence pins during custom merge notice:', reseqErr)
   }
 
   const finalItems = await getPunchItems(targetProjectUuid)
