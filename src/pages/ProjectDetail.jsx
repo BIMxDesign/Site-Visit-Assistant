@@ -1011,13 +1011,13 @@ export default function ProjectDetail() {
         className="sitepunch-header text-white shadow-lg flex-shrink-0 relative z-40"
         style={{
           background: 'var(--brand-header, #7e0b1d)',
-          paddingTop: 'calc(14px + env(safe-area-inset-top, 0px))',
-          paddingBottom: '14px',
+          paddingTop: 'calc(13px + env(safe-area-inset-top, 0px))',
+          paddingBottom: '13px',
           paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center gap-2 h-[46px] min-h-[46px] max-w-4xl mx-auto w-full">
+        <div className="flex items-center gap-2 h-[48px] min-h-[48px] max-w-4xl mx-auto w-full">
           <button
             onClick={activePhase ? () => { setCurrentPhase(null); setSearchQuery('') } : overviewTab !== 'sitevisits' ? () => setOverviewTab('sitevisits') : navigateToProjects}
             className="liquid-glass-btn min-w-[40px] min-h-[40px] p-2 -ml-1 rounded-xl text-white transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
@@ -1025,10 +1025,10 @@ export default function ProjectDetail() {
           >
             <ArrowLeft size={20} />
           </button>
-          <div className="flex-1 min-w-0 flex flex-col justify-center h-[46px]">
+          <div className="flex-1 min-w-0 flex flex-col justify-center min-h-[48px]">
             {activePhase ? (
               <h1
-                className="font-extrabold text-base sm:text-lg leading-tight line-clamp-2 break-words text-white drop-shadow-xs"
+                className="font-extrabold text-base sm:text-lg leading-[1.12] line-clamp-2 break-words text-white drop-shadow-xs"
                 title={activePhase.name}
               >
                 {activePhase.name}
@@ -1070,20 +1070,6 @@ export default function ProjectDetail() {
                   </button>
                 )}
               </div>
-
-              {/* Export Individual Report Backup */}
-              <button
-                onClick={() => handleExportReport(activePhase)}
-                disabled={exportingReportUuid === activePhase?.uuid}
-                className="liquid-glass-btn min-h-[40px] px-2.5 py-1 rounded-xl transition-all flex items-center justify-center gap-1.5 text-white flex-shrink-0 cursor-pointer active:scale-95"
-                title="Export Site Visit Backup (.json)"
-              >
-                <Download size={16} className={`flex-shrink-0 ${exportingReportUuid === activePhase?.uuid ? 'animate-bounce' : ''}`} />
-                <div className="flex flex-col text-left leading-[1.05]">
-                  <span className="text-[11px] font-bold tracking-tight">Export</span>
-                  <span className="text-[11px] font-bold tracking-tight text-white/90">Report</span>
-                </div>
-              </button>
 
               {/* Yellow Box: Generate Report Button with Report text below Generate for concise width */}
               <button
@@ -1178,111 +1164,97 @@ export default function ProjectDetail() {
           {/* Statistics Banner: Interactive Category Switcher on All Site Visits page */}
           {!activePhase && (
           <>
-            <div className="liquid-glass-surface rounded-2xl p-2.5 sm:p-3.5 shadow-sm">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
+            <div className="liquid-glass-surface rounded-2xl p-2 sm:p-3 shadow-sm">
+              <div className="grid grid-cols-4 gap-1.5 sm:gap-2.5">
                 {/* 1. Site Visits Tab Button */}
                 <button
                   type="button"
                   onClick={() => setOverviewTab('sitevisits')}
-                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                  className={`p-2 sm:p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
                     overviewTab === 'sitevisits'
                       ? 'bg-purple-50/90 border-purple-400 shadow-md ring-2 ring-purple-500/30'
                       : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-purple-200 shadow-2xs hover:shadow-xs'
                   }`}
                   title="View all site visits"
                 >
-                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
-                    <ClipboardList size={14} className="text-purple-700 stroke-[2.2]" />
-                    <span className={overviewTab === 'sitevisits' ? 'text-purple-900 font-bold' : ''}>Site Visits</span>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 text-gray-600">
+                    <ClipboardList size={14} className="text-purple-700 stroke-[2.2] flex-shrink-0" />
+                    <span className={`whitespace-nowrap font-semibold text-[10px] xs:text-[11px] sm:text-xs text-center leading-tight ${overviewTab === 'sitevisits' ? 'text-purple-900 font-bold' : ''}`}>
+                      Site Visits
+                    </span>
                   </div>
-                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{phases.length}</p>
+                  <p className="text-base sm:text-xl md:text-2xl font-black text-gray-900 mt-0.5 sm:mt-1">{phases.length}</p>
                   {overviewTab === 'sitevisits' && (
                     <div className="w-8 h-1 rounded-full bg-purple-600 mt-1 animate-fade-in" />
                   )}
                 </button>
 
-                {/* 2. Status Type Button (Open & Closed Counts) */}
+                {/* 2. Key Plans Tab Button */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setOverviewTab('punchitems')
-                    setPunchItemFilter(f => (f === 'open' ? 'closed' : f === 'closed' ? 'all' : 'open'))
-                  }}
-                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
-                    overviewTab === 'punchitems' && (punchItemFilter === 'open' || punchItemFilter === 'closed')
+                  onClick={() => setOverviewTab('keyplans')}
+                  className={`p-2 sm:p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                    overviewTab === 'keyplans'
                       ? 'bg-rose-50/90 border-rose-400 shadow-md ring-2 ring-rose-500/30'
                       : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-rose-200 shadow-2xs hover:shadow-xs'
                   }`}
-                  title="View punch items filtered by Open / Closed status"
+                  title="View all key plans"
                 >
-                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
-                    <CheckSquare size={14} className="text-brand-600 stroke-[2.2]" />
-                    <span className={overviewTab === 'punchitems' && (punchItemFilter === 'open' || punchItemFilter === 'closed') ? 'text-brand-900 font-bold' : ''}>Status</span>
-                  </div>
-                  <div className="flex items-center justify-center gap-1 mt-1.5 flex-wrap">
-                    <span className="text-xs sm:text-sm font-black text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-lg leading-none">
-                      {openItemsCount} Open
-                    </span>
-                    <span className="text-xs sm:text-sm font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-lg leading-none">
-                      {closedItemsCount} Closed
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 text-gray-600">
+                    <FileImage size={14} className="stroke-[2.2] flex-shrink-0" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
+                    <span className={`whitespace-nowrap font-semibold text-[10px] xs:text-[11px] sm:text-xs text-center leading-tight ${overviewTab === 'keyplans' ? 'text-rose-900 font-bold' : ''}`}>
+                      Key Plans
                     </span>
                   </div>
-                  {overviewTab === 'punchitems' && (punchItemFilter === 'open' || punchItemFilter === 'closed') && (
+                  <p className="text-base sm:text-xl md:text-2xl font-black text-gray-900 mt-0.5 sm:mt-1">{floorPlans.length}</p>
+                  {overviewTab === 'keyplans' && (
                     <div className="w-8 h-1 rounded-full bg-rose-600 mt-1 animate-fade-in" />
                   )}
                 </button>
 
-                {/* 3. Due Date Button */}
+                {/* 3. Punch Pins Tab Button */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setOverviewTab('punchitems')
-                    setPunchItemFilter(f => (f === 'dueDate' ? 'all' : 'dueDate'))
-                  }}
-                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
-                    overviewTab === 'punchitems' && punchItemFilter === 'dueDate'
-                      ? 'bg-blue-50/90 border-blue-400 shadow-md ring-2 ring-blue-500/30'
-                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-blue-200 shadow-2xs hover:shadow-xs'
+                  onClick={() => setOverviewTab('punchitems')}
+                  className={`p-2 sm:p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                    overviewTab === 'punchitems'
+                      ? 'bg-rose-50/90 border-rose-400 shadow-md ring-2 ring-rose-500/30'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-rose-200 shadow-2xs hover:shadow-xs'
                   }`}
-                  title="View punch items with assigned due dates"
+                  title="View all punch pins"
                 >
-                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
-                    <Calendar size={14} className="text-blue-600 stroke-[2.2]" />
-                    <span className={overviewTab === 'punchitems' && punchItemFilter === 'dueDate' ? 'text-blue-900 font-bold' : ''}>Due Date</span>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 text-gray-600">
+                    <AlertCircle size={14} className="stroke-[2.2] flex-shrink-0" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
+                    <span className={`whitespace-nowrap font-semibold text-[10px] xs:text-[11px] sm:text-xs text-center leading-tight ${overviewTab === 'punchitems' ? 'text-rose-900 font-bold' : ''}`}>
+                      Punch Pins
+                    </span>
                   </div>
-                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{itemsWithDueDateCount}</p>
-                  <span className="text-[10px] text-blue-700 font-bold bg-blue-50 px-1.5 py-0.2 rounded-md border border-blue-200 mt-0.5">
-                    {overdueCount > 0 ? `${overdueCount} Overdue` : `${itemsWithDueDateCount === 1 ? '1 Item' : `${itemsWithDueDateCount} Items`}`}
-                  </span>
-                  {overviewTab === 'punchitems' && punchItemFilter === 'dueDate' && (
-                    <div className="w-8 h-1 rounded-full bg-blue-600 mt-1 animate-fade-in" />
+                  <p className="text-base sm:text-xl md:text-2xl font-black text-gray-900 mt-0.5 sm:mt-1">{punchItems.length}</p>
+                  {overviewTab === 'punchitems' && (
+                    <div className="w-8 h-1 rounded-full bg-rose-600 mt-1 animate-fade-in" />
                   )}
                 </button>
 
-                {/* 4. Priority Button */}
+                {/* 4. Photos Tab Button */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setOverviewTab('punchitems')
-                    setPunchItemFilter(f => (f === 'priority' ? 'all' : 'priority'))
-                  }}
-                  className={`p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
-                    overviewTab === 'punchitems' && punchItemFilter === 'priority'
-                      ? 'bg-amber-50/90 border-amber-400 shadow-md ring-2 ring-amber-500/30'
-                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-amber-200 shadow-2xs hover:shadow-xs'
+                  onClick={() => setOverviewTab('images')}
+                  className={`p-2 sm:p-3 rounded-xl border text-center transition-all duration-200 cursor-pointer active:scale-95 flex flex-col items-center justify-center relative overflow-hidden group ${
+                    overviewTab === 'images'
+                      ? 'bg-emerald-50/90 border-emerald-400 shadow-md ring-2 ring-emerald-500/30'
+                      : 'bg-white/60 backdrop-blur-md border-white/80 hover:bg-white/90 hover:border-emerald-200 shadow-2xs hover:shadow-xs'
                   }`}
-                  title="View punch items filtered by high / critical priority"
+                  title="View all photos"
                 >
-                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-600">
-                    <AlertTriangle size={14} className="text-amber-600 stroke-[2.2]" />
-                    <span className={overviewTab === 'punchitems' && punchItemFilter === 'priority' ? 'text-amber-900 font-bold' : ''}>Priority</span>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 text-gray-600">
+                    <Camera size={14} className="text-emerald-600 stroke-[2.2] flex-shrink-0" />
+                    <span className={`whitespace-nowrap font-semibold text-[10px] xs:text-[11px] sm:text-xs text-center leading-tight ${overviewTab === 'images' ? 'text-emerald-900 font-bold' : ''}`}>
+                      Photos
+                    </span>
                   </div>
-                  <p className="text-xl sm:text-2xl font-black text-gray-900 mt-1">{highPriorityCount}</p>
-                  <span className="text-[10px] text-amber-800 font-bold bg-amber-50 px-1.5 py-0.2 rounded-md border border-amber-200 mt-0.5">
-                    High / Critical
-                  </span>
-                  {overviewTab === 'punchitems' && punchItemFilter === 'priority' && (
-                    <div className="w-8 h-1 rounded-full bg-amber-600 mt-1 animate-fade-in" />
+                  <p className="text-base sm:text-xl md:text-2xl font-black text-gray-900 mt-0.5 sm:mt-1">{totalPhotos}</p>
+                  {overviewTab === 'images' && (
+                    <div className="w-8 h-1 rounded-full bg-emerald-600 mt-1 animate-fade-in" />
                   )}
                 </button>
               </div>

@@ -1020,12 +1020,12 @@ export default function FloorPlanView() {
       {/* ── Header ── */}
       <header className="sitepunch-header text-white flex-shrink-0 shadow-lg z-30" style={{
         background: 'var(--brand-header, #7e0b1d)',
-        paddingTop: 'calc(14px + env(safe-area-inset-top, 0px))',
-        paddingBottom: '14px',
+        paddingTop: 'calc(13px + env(safe-area-inset-top, 0px))',
+        paddingBottom: '13px',
         paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
         paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
       }}>
-        <div className="flex items-center gap-2 h-[46px] min-h-[46px] max-w-4xl mx-auto w-full">
+        <div className="flex items-center gap-2 h-[48px] min-h-[48px] max-w-4xl mx-auto w-full">
           <button
             onClick={() => {
               const reportUuid = floorPlan?.phaseUuid || currentPhaseUuid || (phases.length > 0 ? phases[0].uuid : null)

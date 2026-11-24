@@ -215,13 +215,13 @@ export default function Dashboard() {
         className="sitepunch-header bg-brand-800 text-white shadow-lg flex-shrink-0"
         style={{
           background: 'var(--brand-header, #1e40af)',
-          paddingTop: 'calc(14px + env(safe-area-inset-top, 0px))',
-          paddingBottom: '14px',
+          paddingTop: 'calc(13px + env(safe-area-inset-top, 0px))',
+          paddingBottom: '13px',
           paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
           paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center justify-between h-[46px] min-h-[46px] max-w-4xl mx-auto w-full">
+        <div className="flex items-center justify-between h-[48px] min-h-[48px] max-w-4xl mx-auto w-full">
           <div className="flex items-center gap-3.5 min-w-0">
             {companyLogo && (
               <img
@@ -291,58 +291,58 @@ export default function Dashboard() {
           ) : (
             <>
               {/* Dashboard Statistics */}
-              <div className="liquid-glass-surface rounded-2xl p-3 sm:p-4 shadow-sm">
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-2.5">
-                <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                  <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <Folder size={14} className="text-amber-600 fill-amber-400/25 stroke-[2.2]" />
-                    <span className="truncate">Projects</span>
+              <div className="liquid-glass-surface rounded-2xl p-2 sm:p-3 md:p-4 shadow-sm">
+              <div className="grid grid-cols-6 gap-1 sm:gap-2 md:gap-2.5">
+                <div className="p-1.5 sm:p-2.5 md:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                  <div className="flex flex-col md:flex-row items-center justify-center gap-0.5 sm:gap-1 text-gray-500 font-semibold">
+                    <Folder size={14} className="text-amber-600 fill-amber-400/25 stroke-[2.2] flex-shrink-0" />
+                    <span className="whitespace-nowrap text-[9px] xs:text-[10px] sm:text-xs text-center leading-tight">Projects</span>
                   </div>
-                  <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{stats.totalProjects}</p>
+                  <p className="text-sm xs:text-base sm:text-xl md:text-2xl font-bold text-gray-900 mt-0.5 sm:mt-1">{stats.totalProjects}</p>
                 </div>
 
-                <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                  <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <ClipboardList size={14} className="text-purple-700 stroke-[2.2]" />
-                    <span className="truncate">Site Visits</span>
+                <div className="p-1.5 sm:p-2.5 md:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                  <div className="flex flex-col md:flex-row items-center justify-center gap-0.5 sm:gap-1 text-gray-500 font-semibold">
+                    <ClipboardList size={14} className="text-purple-700 stroke-[2.2] flex-shrink-0" />
+                    <span className="whitespace-nowrap text-[9px] xs:text-[10px] sm:text-xs text-center leading-tight">Site Visits</span>
                   </div>
-                  <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{stats.totalReports}</p>
+                  <p className="text-sm xs:text-base sm:text-xl md:text-2xl font-bold text-gray-900 mt-0.5 sm:mt-1">{stats.totalReports}</p>
                 </div>
 
-                <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                  <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <FileImage size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
-                    <span className="truncate">Key Plans</span>
+                <div className="p-1.5 sm:p-2.5 md:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                  <div className="flex flex-col md:flex-row items-center justify-center gap-0.5 sm:gap-1 text-gray-500 font-semibold">
+                    <FileImage size={14} className="stroke-[2.2] flex-shrink-0" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
+                    <span className="whitespace-nowrap text-[9px] xs:text-[10px] sm:text-xs text-center leading-tight">Key Plans</span>
                   </div>
-                  <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">{stats.totalDrawings}</p>
+                  <p className="text-sm xs:text-base sm:text-xl md:text-2xl font-bold text-gray-900 mt-0.5 sm:mt-1">{stats.totalDrawings}</p>
                 </div>
 
-                <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                  <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <AlertCircle size={14} className="stroke-[2.2]" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
-                    <span className="truncate">Punch Pins</span>
+                <div className="p-1.5 sm:p-2.5 md:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                  <div className="flex flex-col md:flex-row items-center justify-center gap-0.5 sm:gap-1 text-gray-500 font-semibold">
+                    <AlertCircle size={14} className="stroke-[2.2] flex-shrink-0" style={{ color: 'var(--punch-pin-color, #a40e26)' }} />
+                    <span className="whitespace-nowrap text-[9px] xs:text-[10px] sm:text-xs text-center leading-tight">Punch Pins</span>
                   </div>
-                  <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
+                  <p className="text-sm xs:text-base sm:text-xl md:text-2xl font-bold text-gray-900 mt-0.5 sm:mt-1">
                     {stats.totalPins}
                   </p>
                 </div>
 
-                <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                  <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <Camera size={14} className="text-emerald-600" />
-                    <span className="truncate">Photos</span>
+                <div className="p-1.5 sm:p-2.5 md:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                  <div className="flex flex-col md:flex-row items-center justify-center gap-0.5 sm:gap-1 text-gray-500 font-semibold">
+                    <Camera size={14} className="text-emerald-600 flex-shrink-0" />
+                    <span className="whitespace-nowrap text-[9px] xs:text-[10px] sm:text-xs text-center leading-tight">Photos</span>
                   </div>
-                  <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
+                  <p className="text-sm xs:text-base sm:text-xl md:text-2xl font-bold text-gray-900 mt-0.5 sm:mt-1">
                     {stats.totalPhotos ?? 0}
                   </p>
                 </div>
 
-                <div className="p-2.5 sm:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
-                  <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 font-semibold">
-                    <FileText size={14} className="text-purple-600" />
-                    <span className="truncate">PDF Exports</span>
+                <div className="p-1.5 sm:p-2.5 md:p-3 bg-white/60 backdrop-blur-md rounded-xl border border-white/80 text-center shadow-2xs">
+                  <div className="flex flex-col md:flex-row items-center justify-center gap-0.5 sm:gap-1 text-gray-500 font-semibold">
+                    <FileText size={14} className="text-purple-600 flex-shrink-0" />
+                    <span className="whitespace-nowrap text-[9px] xs:text-[10px] sm:text-xs text-center leading-tight">PDF Exports</span>
                   </div>
-                  <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-1">
+                  <p className="text-sm xs:text-base sm:text-xl md:text-2xl font-bold text-gray-900 mt-0.5 sm:mt-1">
                     {stats.totalExportedPdfs ?? 0}
                   </p>
                 </div>
