@@ -218,8 +218,8 @@ export default function PDFPreview() {
         getUsers().catch(() => []),
       ])
 
-      // Only observations with saved notes are valid to be included in reports
-      const validItems = its.filter(i => i.notes && i.notes.trim().length > 0)
+      // Only observations with saved notes/description are valid to be included in reports
+      const validItems = its.filter(i => (i.notes && i.notes.trim().length > 0) || (i.description && i.description.trim().length > 0) || (i.title && i.title.trim().length > 0))
 
       // Pre-load photos and compute aspect ratios to ensure proportions are preserved
       const pmap = {}
@@ -729,7 +729,7 @@ export default function PDFPreview() {
           : Math.max(45, photoStartX - fieldsStartX - 5)
 
         // ── Observation text and label preparation ──
-        const cleanNotes = stripHtmlToPlainText(item.notes || '')
+        const cleanNotes = stripHtmlToPlainText(item.notes || item.description || '')
         const cleanTitle = stripHtmlToPlainText(item.title || '')
         const rawObsText = (cleanNotes && cleanTitle && cleanNotes.trim() !== cleanTitle.trim())
           ? `${cleanTitle.trim()} — ${cleanNotes.trim()}`
@@ -1027,7 +1027,7 @@ export default function PDFPreview() {
         if (exportFields.keyPlans) {
           for (let dIdx = 0; dIdx < drawingsToRender.length; dIdx++) {
             const fp = drawingsToRender[dIdx]
-            if (dIdx > 0 || y > margin + 40) {
+            if (dIdx > 0) {
               addPageNum()
               doc.addPage()
               y = margin
@@ -1048,7 +1048,7 @@ export default function PDFPreview() {
               const titleH = 7
               const maxAllowedW = W - margin * 2
               let maxAllowedH = H - margin - y - titleH - 6
-              if (maxAllowedH < 90 && y > margin) {
+              if (maxAllowedH < 75 && y > margin) {
                 addPageNum()
                 doc.addPage()
                 y = margin
@@ -1194,7 +1194,7 @@ export default function PDFPreview() {
             const catLines = colCategory ? doc.splitTextToSize(rawTrade, colCategory.w - 4) : []
 
             // Description text
-            const cleanNotes = stripHtmlToPlainText(item.notes || '')
+            const cleanNotes = stripHtmlToPlainText(item.notes || item.description || '')
             const cleanTitle = stripHtmlToPlainText(item.title || '')
             const descText = (cleanNotes && cleanTitle && cleanNotes.trim() !== cleanTitle.trim())
               ? `${cleanTitle.trim()} — ${cleanNotes.trim()}`
@@ -1432,12 +1432,10 @@ export default function PDFPreview() {
         for (let dIdx = 0; dIdx < drawingsToRender.length; dIdx++) {
           const fp = drawingsToRender[dIdx]
 
-          // Advance to a clean page:
-          // 1. Always for subsequent drawings when key plans are included
-          // 2. For the first drawing (dIdx === 0) if project metadata occupies the top of page 1,
-          //    giving the key plan architectural drawing a dedicated full-page view without squeezing or cropping
+          // Advance to a clean page for subsequent drawings (dIdx > 0).
+          // Drawing 0 renders on Page 1 directly below the header metadata whenever sufficient vertical space is available (eliminates blank space on Page 1).
           if (exportFields.keyPlans) {
-            if (dIdx > 0 || y > margin + 40) {
+            if (dIdx > 0) {
               addPageNum()
               doc.addPage()
               y = margin
@@ -1465,8 +1463,8 @@ export default function PDFPreview() {
               const maxAllowedW = W - margin * 2
               let maxAllowedH = H - margin - y - titleH - 6 // Remaining vertical space with safety buffer
 
-              // If remaining space on this page is too tight to display an architectural plan legibly (< 90mm), advance to next page
-              if (maxAllowedH < 90 && y > margin) {
+              // If remaining space on this page is too tight to display an architectural plan legibly (< 75mm), advance to next page
+              if (maxAllowedH < 75 && y > margin) {
                 addPageNum()
                 doc.addPage()
                 y = margin

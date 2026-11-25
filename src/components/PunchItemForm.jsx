@@ -163,10 +163,11 @@ export default function PunchItemForm() {
       setLoadError(true)
       return
     }
-    const notesHtml = notesToHtml(it.notes || '')
+    const initialContent = it.notes || it.description || it.title || ''
+    const notesHtml = notesToHtml(initialContent)
     setItem(it)
     itemRef.current = it
-    hadNotesInitiallyRef.current = !!(it.notes && it.notes.trim().length > 0)
+    hadNotesInitiallyRef.current = !!(initialContent && initialContent.trim().length > 0)
     isSavedRef.current = false
     setForm({
       title:      it.title      || '',
@@ -1143,7 +1144,7 @@ export default function PunchItemForm() {
               paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
             }}
           >
-            <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full">
+            <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full px-0 md:px-16 lg:px-20">
               <div className="flex items-center gap-3 min-w-0">
                 <button
                   type="button"
@@ -1207,7 +1208,7 @@ export default function PunchItemForm() {
               paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
             }}
           >
-            <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full">
+            <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full px-0 md:px-16 lg:px-20">
               <div className="flex items-center gap-3 min-w-0">
                 <button
                   type="button"
@@ -1243,50 +1244,17 @@ export default function PunchItemForm() {
                   </p>
                 </div>
               </div>
-
-              {/* Desktop-only Observation Navigation: strictly hidden on phone view */}
-              {siblings.length > 1 && (
-                <div className="hidden md:flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handlePrevObservation}
-                    disabled={!hasPrev || saving}
-                    className="liquid-glass-btn px-3 py-1.5 rounded-xl text-white transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer disabled:opacity-30 disabled:pointer-events-none hover:bg-white/20 active:scale-95 shadow-sm"
-                    title={hasPrev ? `Previous Observation (#${prevItem?.itemNumber || ''})` : 'First observation'}
-                    aria-label="Previous observation"
-                  >
-                    <ChevronLeft size={16} />
-                    <span>Prev</span>
-                  </button>
-
-                  <div className="px-2.5 py-1 rounded-lg bg-black/20 text-white/90 text-xs font-mono font-medium select-none">
-                    {currentIndex >= 0 ? currentIndex + 1 : 1} of {siblings.length}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleNextObservation}
-                    disabled={!hasNext || saving}
-                    className="liquid-glass-btn px-3 py-1.5 rounded-xl text-white transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer disabled:opacity-30 disabled:pointer-events-none hover:bg-white/20 active:scale-95 shadow-sm"
-                    title={hasNext ? `Next Observation (#${nextItem?.itemNumber || ''})` : 'Last observation'}
-                    aria-label="Next observation"
-                  >
-                    <span>Next</span>
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
-              )}
             </div>
           </header>
 
           <div
-            className="flex-1 overflow-y-auto p-4 sm:p-6 pb-8 bg-gray-50"
+            className="flex-1 overflow-y-auto py-4 sm:py-6 pb-8 bg-gray-50"
             style={{
               paddingLeft: 'calc(1rem + env(safe-area-inset-left, 0px))',
               paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
             }}
           >
-            <div className="max-w-4xl mx-auto w-full space-y-4">
+            <div className="max-w-4xl mx-auto w-full space-y-4 px-0 md:px-16 lg:px-20">
               {/* Compulsory Validation Error Alert */}
               {error && (
                 <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2 font-medium">
@@ -1800,7 +1768,7 @@ export default function PunchItemForm() {
               paddingRight: 'calc(1rem + env(safe-area-inset-right, 0px))',
             }}
           >
-            <div className="max-w-4xl mx-auto w-full flex items-center justify-between gap-3">
+            <div className="max-w-4xl mx-auto w-full flex items-center justify-between gap-3 px-0 md:px-16 lg:px-20">
               <button
                 type="button"
                 onClick={handleDeletePin}
@@ -1841,7 +1809,10 @@ export default function PunchItemForm() {
                   type="button"
                   onClick={handlePrevObservation}
                   disabled={saving}
-                  className="hidden md:flex fixed left-4 lg:left-8 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white text-gray-800 shadow-2xl border border-gray-200 items-center justify-center hover:bg-brand-50 hover:text-brand-700 hover:scale-110 active:scale-95 transition-all z-30 cursor-pointer group"
+                  className="hidden md:flex fixed top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white text-gray-800 shadow-2xl border border-gray-200 items-center justify-center hover:bg-brand-50 hover:text-brand-700 hover:scale-110 active:scale-95 transition-all z-30 cursor-pointer group"
+                  style={{
+                    left: 'max(0.75rem, calc(50% - 448px - 3.75rem))',
+                  }}
                   title={`Previous Observation (#${prevItem?.itemNumber || ''})`}
                   aria-label="Previous observation"
                 >
@@ -1854,7 +1825,10 @@ export default function PunchItemForm() {
                   type="button"
                   onClick={handleNextObservation}
                   disabled={saving}
-                  className="hidden md:flex fixed right-4 lg:right-8 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white text-gray-800 shadow-2xl border border-gray-200 items-center justify-center hover:bg-brand-50 hover:text-brand-700 hover:scale-110 active:scale-95 transition-all z-30 cursor-pointer group"
+                  className="hidden md:flex fixed top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white text-gray-800 shadow-2xl border border-gray-200 items-center justify-center hover:bg-brand-50 hover:text-brand-700 hover:scale-110 active:scale-95 transition-all z-30 cursor-pointer group"
+                  style={{
+                    right: 'max(0.75rem, calc(50% - 448px - 3.75rem))',
+                  }}
                   title={`Next Observation (#${nextItem?.itemNumber || ''})`}
                   aria-label="Next observation"
                 >
@@ -1878,7 +1852,7 @@ export default function PunchItemForm() {
               paddingBottom: '14px',
             }}
           >
-            <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full">
+            <div className="flex items-center justify-between min-h-[46px] max-w-4xl mx-auto w-full px-0 md:px-16 lg:px-20">
               <div className="flex items-center gap-3 min-w-0">
                 <button
                   type="button"

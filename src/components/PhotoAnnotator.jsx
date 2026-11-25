@@ -62,6 +62,48 @@ function ConstructionCloudIcon({ size = 18, className = '' }) {
   )
 }
 
+// Architectural Dimension Line Icon
+function DimensionLineIcon({ size = 16, className = '' }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLineCap="round"
+      strokeLineJoin="round"
+      className={className}
+    >
+      <line x1="3" y1="5" x2="3" y2="19" />
+      <line x1="21" y1="5" x2="21" y2="19" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <path d="M7 9 L3 12 L7 15" />
+      <path d="M17 9 L21 12 L17 15" />
+    </svg>
+  )
+}
+
+// Straight Line Icon
+function StraightLineIcon({ size = 16, className = '' }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLineCap="round"
+      strokeLineJoin="round"
+      className={className}
+    >
+      <line x1="4" y1="20" x2="20" y2="4" />
+    </svg>
+  )
+}
+
 // Exactly 3 primary markup colors
 const THREE_COLORS = ['#ef4444', '#f59e0b', '#3b82f6']
 
@@ -78,10 +120,12 @@ const SELECT_TOOLS = [
 ]
 
 const SHAPES = [
-  { id: 'rectangle', label: 'Rectangle', icon: <RectangleIcon size={16} /> },
-  { id: 'circle',    label: 'Circle',    icon: <CircleIcon size={16} /> },
-  { id: 'cloud',     label: 'Cloud',     icon: <ConstructionCloudIcon size={17} /> },
-  { id: 'arrow',     label: 'Arrow',     icon: <ArrowRight size={15} /> },
+  { id: 'rectangle', label: 'Rectangle',      icon: <RectangleIcon size={16} /> },
+  { id: 'circle',    label: 'Circle',         icon: <CircleIcon size={16} /> },
+  { id: 'cloud',     label: 'Cloud',          icon: <ConstructionCloudIcon size={17} /> },
+  { id: 'arrow',     label: 'Arrow',          icon: <ArrowRight size={15} /> },
+  { id: 'dimension', label: 'Dimension Line', icon: <DimensionLineIcon size={16} /> },
+  { id: 'line',      label: 'Line',           icon: <StraightLineIcon size={16} /> },
 ]
 
 const OTHER_TOOLS = [
@@ -672,6 +716,101 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, saveButtonL
           })
         }
       }
+    } else if (currentTool === 'dimension') {
+      const dx  = x - ox
+      const dy  = y - oy
+      const len = Math.hypot(dx, dy)
+      if (len > 4) {
+        const angle      = Math.atan2(dy, dx)
+        const perpAngle  = angle + Math.PI / 2
+        const aLen       = Math.min(22, Math.max(10, len * 0.2))
+        const arrowAngle = Math.PI / 6 // 30 deg
+
+        // End arrowhead (pointing towards x, y)
+        const ex1 = x - aLen * Math.cos(angle - arrowAngle)
+        const ey1 = y - aLen * Math.sin(angle - arrowAngle)
+        const ex2 = x - aLen * Math.cos(angle + arrowAngle)
+        const ey2 = y - aLen * Math.sin(angle + arrowAngle)
+
+        // Start arrowhead (pointing towards ox, oy)
+        const sx1 = ox + aLen * Math.cos(angle - arrowAngle)
+        const sy1 = oy + aLen * Math.sin(angle - arrowAngle)
+        const sx2 = ox + aLen * Math.cos(angle + arrowAngle)
+        const sy2 = oy + aLen * Math.sin(angle + arrowAngle)
+
+        // Perpendicular witness / tick lines at endpoints
+        const tickLen  = Math.min(22, Math.max(12, strokeWidth * 3.5))
+        const halfTick = tickLen / 2
+        const stX1 = ox + halfTick * Math.cos(perpAngle)
+        const stY1 = oy + halfTick * Math.sin(perpAngle)
+        const stX2 = ox - halfTick * Math.cos(perpAngle)
+        const stY2 = oy - halfTick * Math.sin(perpAngle)
+
+        const enX1 = x + halfTick * Math.cos(perpAngle)
+        const enY1 = y + halfTick * Math.sin(perpAngle)
+        const enX2 = x - halfTick * Math.cos(perpAngle)
+        const enY2 = y - halfTick * Math.sin(perpAngle)
+
+        if (isDash) {
+          const shaft = new Fabric.Path(`M ${ox} ${oy} L ${x} ${y}`, {
+            stroke: strokeColor,
+            strokeWidth,
+            strokeDashArray: dash,
+            fill: '',
+            strokeLineCap: 'round',
+            strokeLineJoin: 'round',
+          })
+          const markers = new Fabric.Path(
+            `M ${stX1} ${stY1} L ${stX2} ${stY2} M ${enX1} ${enY1} L ${enX2} ${enY2} M ${ex1} ${ey1} L ${x} ${y} L ${ex2} ${ey2} M ${sx1} ${sy1} L ${ox} ${oy} L ${sx2} ${sy2}`,
+            {
+              stroke: strokeColor,
+              strokeWidth,
+              strokeDashArray: null,
+              fill: '',
+              strokeLineCap: 'round',
+              strokeLineJoin: 'round',
+            }
+          )
+          obj = new Fabric.Group([shaft, markers], {
+            selectable: false,
+            cornerColor: '#3b82f6',
+            cornerSize: 8,
+            transparentCorners: false,
+          })
+        } else {
+          const pathData = `M ${ox} ${oy} L ${x} ${y} M ${stX1} ${stY1} L ${stX2} ${stY2} M ${enX1} ${enY1} L ${enX2} ${enY2} M ${ex1} ${ey1} L ${x} ${y} L ${ex2} ${ey2} M ${sx1} ${sy1} L ${ox} ${oy} L ${sx2} ${sy2}`
+          obj = new Fabric.Path(pathData, {
+            stroke: strokeColor,
+            strokeWidth,
+            strokeDashArray: null,
+            fill: '',
+            strokeLineCap: 'round',
+            strokeLineJoin: 'round',
+            selectable: false,
+            cornerColor: '#3b82f6',
+            cornerSize: 8,
+            transparentCorners: false,
+          })
+        }
+      }
+    } else if (currentTool === 'line') {
+      const dx  = x - ox
+      const dy  = y - oy
+      const len = Math.hypot(dx, dy)
+      if (len > 3) {
+        obj = new Fabric.Line([ox, oy, x, y], {
+          stroke: strokeColor,
+          strokeWidth,
+          strokeDashArray: dash,
+          fill: '',
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          selectable: false,
+          cornerColor: '#3b82f6',
+          cornerSize: 8,
+          transparentCorners: false,
+        })
+      }
     } else if (currentTool === 'cloud') {
       obj = drawCloud(Fabric, ox, oy, x, y, strokeColor, strokeWidth, dash)
     }
@@ -1033,7 +1172,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, saveButtonL
     if (['select', 'pan'].includes(id)) {
       setSelectMode(id)
     }
-    if (['rectangle', 'circle', 'cloud', 'arrow'].includes(id)) {
+    if (['rectangle', 'circle', 'cloud', 'arrow', 'dimension', 'line'].includes(id)) {
       setSelectedShape(id)
     }
     setTool(id)
@@ -1115,7 +1254,7 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, saveButtonL
     }
   }
 
-  const isShapeActive = ['rectangle', 'circle', 'cloud', 'arrow'].includes(tool) && !isCropping
+  const isShapeActive = ['rectangle', 'circle', 'cloud', 'arrow', 'dimension', 'line'].includes(tool) && !isCropping
   const isSelectActive = (tool === 'select' || tool === 'pan' || isCropping)
   const currentShapeObj = SHAPES.find(s => s.id === selectedShape) || SHAPES[2] // defaults to Cloud
   const currentSelectToolObj = SELECT_TOOLS.find(s => s.id === (isCropping ? 'crop' : selectMode)) || SELECT_TOOLS[0]
@@ -1233,8 +1372,8 @@ export default function PhotoAnnotator({ imageDataUrl, photoQuality, saveButtonL
 
               {showShapesMenu && (
                 <div
-                  className="absolute top-full left-0 mt-2 z-[70] bg-gray-900 border border-gray-700 rounded-xl p-1.5 shadow-2xl backdrop-blur-md flex flex-col gap-1 min-w-[135px] animate-fade-in"
-                  style={{ minWidth: '135px' }}
+                  className="absolute top-full left-0 mt-2 z-[70] bg-gray-900 border border-gray-700 rounded-xl p-1.5 shadow-2xl backdrop-blur-md flex flex-col gap-1 min-w-[150px] animate-fade-in"
+                  style={{ minWidth: '150px' }}
                 >
                   {SHAPES.map(s => {
                     const isSelected = !isCropping && tool === s.id

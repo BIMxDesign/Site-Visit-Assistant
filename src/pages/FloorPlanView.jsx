@@ -716,8 +716,11 @@ export default function FloorPlanView() {
 
   // Filtered & sorted observations list
   const filteredItems = useMemo(() => {
-    // Only observations with saved notes (or actively being created in open modal) form pins on key plan
-    let list = punchItems.filter(i => (i.notes && i.notes.trim().length > 0) || (showPunchForm && i.uuid === currentPunchItemUuid))
+    // Only observations with saved notes/description (or actively being created in open modal) form pins on key plan
+    let list = punchItems.filter(i => {
+      const content = (i.notes || i.description || i.title || '').trim()
+      return (content.length > 0) || (showPunchForm && i.uuid === currentPunchItemUuid)
+    })
 
     if (obsFilter === 'All' || obsFilter === 'Number (1→9)') {
       return list.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
@@ -769,7 +772,7 @@ export default function FloorPlanView() {
     }
 
     return list.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0))
-  }, [punchItems, obsFilter])
+  }, [punchItems, obsFilter, showPunchForm, currentPunchItemUuid])
 
   // All pin instances (primary pin + any extra pin instances) on this floor plan drawing
   const allPinsToRender = useMemo(() => {
@@ -777,13 +780,15 @@ export default function FloorPlanView() {
     const list = []
     filteredItems.forEach(item => {
       // Primary pin
-      const showPrimary = (item.floorPlanUuid === currentFloorPlanUuid || (!item.floorPlanUuid && item.pinX != null)) && item.pinX != null && item.pinY != null
+      const px = item.pinX != null ? item.pinX : item.x
+      const py = item.pinY != null ? item.pinY : item.y
+      const showPrimary = (item.floorPlanUuid === currentFloorPlanUuid || (!item.floorPlanUuid && px != null)) && px != null && py != null
       if (showPrimary) {
         list.push({
           key: `primary-${item.uuid}`,
           item,
-          pinX: item.pinX,
-          pinY: item.pinY,
+          pinX: px,
+          pinY: py,
           isExtra: false,
           extraPinId: null,
         })
@@ -791,13 +796,15 @@ export default function FloorPlanView() {
       // Extra pin instances
       if (Array.isArray(item.extraPins)) {
         item.extraPins.forEach((ep, idx) => {
-          const showExtra = (ep.floorPlanUuid === currentFloorPlanUuid || (!ep.floorPlanUuid && item.floorPlanUuid === currentFloorPlanUuid)) && ep.pinX != null && ep.pinY != null
+          const epx = ep.pinX != null ? ep.pinX : ep.x
+          const epy = ep.pinY != null ? ep.pinY : ep.y
+          const showExtra = (ep.floorPlanUuid === currentFloorPlanUuid || (!ep.floorPlanUuid && item.floorPlanUuid === currentFloorPlanUuid)) && epx != null && epy != null
           if (showExtra) {
             list.push({
               key: `extra-${item.uuid}-${ep.id || idx}`,
               item,
-              pinX: ep.pinX,
-              pinY: ep.pinY,
+              pinX: epx,
+              pinY: epy,
               isExtra: true,
               extraPinId: ep.id,
             })
@@ -1760,9 +1767,9 @@ export default function FloorPlanView() {
                         {/* Observation Title - ONLY single line with '...' */}
                         <h4
                           className="font-bold text-sm text-gray-900 leading-snug truncate block"
-                          title={item.title || item.notes || `Observation #${item.itemNumber}`}
+                          title={item.title || item.notes || item.description || `Observation #${item.itemNumber}`}
                         >
-                          {(item.title || item.notes ? stripHtmlToPlainText(item.title || item.notes) : '') || `Observation #${item.itemNumber}`}
+                          {(item.title || item.notes || item.description ? stripHtmlToPlainText(item.title || item.notes || item.description) : '') || `Observation #${item.itemNumber}`}
                         </h4>
 
                         {/* Badges Row: Status dropdown, Priority, Extra Pins */}

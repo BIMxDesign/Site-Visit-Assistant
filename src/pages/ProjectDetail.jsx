@@ -2210,27 +2210,15 @@ export default function ProjectDetail() {
               Add Observation
             </button>
           ) : (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => reportFileInputRef.current?.click()}
-                disabled={importingReport}
-                className="sitepunch-fab flex items-center gap-1.5 bg-white/95 hover:bg-white text-purple-900 border border-purple-200 hover:border-purple-300 active:scale-95 px-4 py-3 rounded-full shadow-lg transition-all font-bold text-xs sm:text-sm cursor-pointer"
-                title="Import Site Visit Report Backup (.json)"
-              >
-                <Upload size={16} className={importingReport ? 'animate-spin' : ''} />
-                <span>Import Report</span>
-              </button>
-              <button
-                onClick={() => { setEditingPhase(null); setShowPhaseModal(true) }}
-                className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm cursor-pointer"
-                style={{ background: 'var(--brand-button, #a40e26)' }}
-                title="Create a new site visit"
-              >
-                <Plus size={20} />
-                New Site Visit
-              </button>
-            </div>
+            <button
+              onClick={() => { setEditingPhase(null); setShowPhaseModal(true) }}
+              className="sitepunch-fab flex items-center gap-2 bg-brand-700 hover:bg-brand-800 active:scale-95 text-white px-5 py-3.5 rounded-full shadow-xl transition-all font-semibold text-sm cursor-pointer"
+              style={{ background: 'var(--brand-button, #a40e26)' }}
+              title="Create a new site visit"
+            >
+              <Plus size={20} />
+              New Site Visit
+            </button>
           )
         ) : (
           <div

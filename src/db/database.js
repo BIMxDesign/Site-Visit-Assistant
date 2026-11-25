@@ -486,12 +486,25 @@ export async function deleteFloorPlan(uuid) {
 }
 
 // --- Punch item helpers ---
+export function normalizePunchItem(it) {
+  if (!it) return it
+  const text = it.notes || it.description || it.title || ''
+  if (!it.notes && text) it.notes = text
+  if (!it.description && text) it.description = text
+  if (it.pinX == null && it.x != null) it.pinX = it.x
+  if (it.pinY == null && it.y != null) it.pinY = it.y
+  if (it.x == null && it.pinX != null) it.x = it.pinX
+  if (it.y == null && it.pinY != null) it.y = it.pinY
+  return it
+}
+
 export async function getPunchItems(projectUuid) {
   if (!projectUuid) return []
   try {
     const cleanId = String(projectUuid).trim()
     const all = await db.punchItems.toArray()
-    return all.filter(it => it.projectUuid && String(it.projectUuid).trim() === cleanId)
+    const filtered = all.filter(it => it.projectUuid && String(it.projectUuid).trim() === cleanId)
+    return filtered.map(normalizePunchItem)
   } catch (err) {
     console.error('Failed to getPunchItems:', err)
     return []
@@ -509,14 +522,23 @@ export async function getPunchItemsByFloorPlan(floorPlanUuid) {
   const map = new Map()
   directItems.forEach(it => map.set(it.uuid, it))
   extraItems.forEach(it => map.set(it.uuid, it))
-  return Array.from(map.values())
+  
+  // Filter out any ghost blank items that have no content
+  const results = Array.from(map.values())
+  const valid = results.filter(it => {
+    const content = (it.notes || it.description || it.title || '').trim()
+    return content.length > 0 || (Array.isArray(it.extraPins) && it.extraPins.length > 0)
+  })
+  return valid.map(normalizePunchItem)
 }
 export async function getPunchItem(uuid) {
-  return db.punchItems.where('uuid').equals(uuid).first()
+  const item = await db.punchItems.where('uuid').equals(uuid).first()
+  return normalizePunchItem(item)
 }
 export async function savePunchItem(item) {
   if (!item) return
   const { id: _ignoredId, ...itemData } = item
+  normalizePunchItem(itemData)
   const existing = await db.punchItems.where('uuid').equals(itemData.uuid).first()
   if (existing) { await db.punchItems.update(existing.id, { ...itemData, updatedAt: Date.now() }); return }
   await db.punchItems.add({ ...itemData, createdAt: itemData.createdAt || Date.now(), updatedAt: Date.now() })
@@ -626,11 +648,40 @@ export async function resequenceReportPins(arg1, arg2) {
     return false
   })
 
-  const targetItems = reportItems.length > 0 ? reportItems : allItems
-  if (targetItems.length === 0) return
+  const rawTargetItems = reportItems.length > 0 ? reportItems : allItems
+  if (rawTargetItems.length === 0) return
+
+  // Clean up any orphan blank ghost items (no notes, no description, no title, no extra pins, and no photos)
+  // so they do not consume sequence numbers and cause missing number gaps (e.g. 2, 4, 6...)
+  const allDbPhotos = await db.photos.toArray()
+  const photoCountsByItem = {}
+  for (const ph of allDbPhotos) {
+    if (ph.punchItemUuid) {
+      photoCountsByItem[ph.punchItemUuid] = (photoCountsByItem[ph.punchItemUuid] || 0) + 1
+    }
+  }
+
+  const validTargetItems = []
+  for (const it of rawTargetItems) {
+    const content = (it.notes || it.description || it.title || '').trim()
+    const pCount = photoCountsByItem[it.uuid] || 0
+    const hasExtras = Array.isArray(it.extraPins) && it.extraPins.length > 0
+    if (!content && pCount === 0 && !hasExtras) {
+      // Empty ghost item -> delete from DB so it doesn't take sequence numbers
+      try {
+        await db.punchItems.where('id').equals(it.id).delete()
+      } catch (delErr) {
+        console.warn('Failed deleting blank ghost item:', delErr)
+      }
+    } else {
+      validTargetItems.push(it)
+    }
+  }
+
+  if (validTargetItems.length === 0) return
 
   // Any observations in the report not assigned to a drawing (list-only observations)
-  const listItems = targetItems.filter(i => !i.floorPlanUuid || !orderedFpUuids.has(i.floorPlanUuid))
+  const listItems = validTargetItems.filter(i => !i.floorPlanUuid || !orderedFpUuids.has(i.floorPlanUuid))
 
   // Combine floor plans and direct list observations based on their relative order
   const units = [
@@ -661,7 +712,7 @@ export async function resequenceReportPins(arg1, arg2) {
   const finalOrderedPins = []
   for (const unit of units) {
     if (unit.type === 'fp') {
-      const fpPins = targetItems.filter(i => i.floorPlanUuid === unit.uuid)
+      const fpPins = validTargetItems.filter(i => i.floorPlanUuid === unit.uuid)
       fpPins.sort((a, b) => (a.itemNumber || 0) - (b.itemNumber || 0) || (a.createdAt || 0) - (b.createdAt || 0))
       finalOrderedPins.push(...fpPins)
     } else {
@@ -673,12 +724,32 @@ export async function resequenceReportPins(arg1, arg2) {
   for (let i = 0; i < finalOrderedPins.length; i++) {
     const seq = i + 1
     const it = finalOrderedPins[i]
+    normalizePunchItem(it)
+    const updates = {}
     if (it.itemNumber !== seq) {
-      await db.punchItems.update(it.id, {
-        itemNumber: seq,
-        updatedAt: Date.now()
-      })
+      updates.itemNumber = seq
       it.itemNumber = seq
+    }
+    if (!it.notes && it.description) {
+      updates.notes = it.description
+      it.notes = it.description
+    }
+    if (!it.description && it.notes) {
+      updates.description = it.notes
+      it.description = it.notes
+    }
+    if (it.pinX == null && it.x != null) {
+      updates.pinX = it.x
+      it.pinX = it.x
+    }
+    if (it.pinY == null && it.y != null) {
+      updates.pinY = it.y
+      it.pinY = it.y
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updates.updatedAt = Date.now()
+      await db.punchItems.update(it.id, updates)
     }
   }
 }
@@ -729,13 +800,14 @@ export async function getNextItemNumber(projectUuid, phaseUuid = null, floorPlan
 
     if (fpIndex !== -1) {
       const allItems = await db.punchItems.where('projectUuid').equals(projectUuid).toArray()
+      const validAllItems = allItems.filter(it => (it.notes || it.description || it.title || '').trim().length > 0)
       let countBefore = 0
       for (let i = 0; i < fpIndex; i++) {
         const prevFpUuid = orderedFps[i].uuid
-        const prevPins = allItems.filter(item => item.floorPlanUuid === prevFpUuid)
+        const prevPins = validAllItems.filter(item => item.floorPlanUuid === prevFpUuid)
         countBefore += prevPins.length
       }
-      const currentPins = allItems.filter(item => item.floorPlanUuid === floorPlanUuid)
+      const currentPins = validAllItems.filter(item => item.floorPlanUuid === floorPlanUuid)
       return countBefore + currentPins.length + 1
     }
   }
@@ -746,7 +818,8 @@ export async function getNextItemNumber(projectUuid, phaseUuid = null, floorPlan
     const phaseFpUuids = new Set(phaseFps.map(f => f.uuid))
     const allItems = await db.punchItems.where('projectUuid').equals(projectUuid).toArray()
     const phaseItems = allItems.filter(
-      i => (i.phaseUuid === targetPhaseUuid) || phaseFpUuids.has(i.floorPlanUuid)
+      i => ((i.phaseUuid === targetPhaseUuid) || phaseFpUuids.has(i.floorPlanUuid)) &&
+           (i.notes || i.description || i.title || '').trim().length > 0
     )
     if (!phaseItems.length) return 1
     return phaseItems.length + 1
